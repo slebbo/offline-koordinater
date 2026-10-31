@@ -1,6 +1,18 @@
 // Page components. Each factory is registered with Alpine.data and keeps its
 // own DOM behavior; shared position and offline flags live in Alpine stores.
 
+// iPhone and iPad report a missing prompt the same way as a denied tap, and
+// often show no dialog at all when Location Services or Safari is switched off.
+const IOS_LOCATION = /iPad|iPhone|iPod/.test(navigator.userAgent)
+  || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+function locationAdvice() {
+  if (IOS_LOCATION) {
+    return " Om en fråga visas, svara på den. Annars slå på Platstjänster och tillåt Safari: Inställningar → Integritet och säkerhet → Platstjänster → Safari.";
+  }
+  return " Om en fråga visas, svara på den. Annars tillåt plats för den här sidan i webbläsarens inställningar.";
+}
+
 const STATUS_TEXT = {
   idle: "Ingen hämtning pågår.",
   checking: "Kontrollerar om enheten kan hämta position…",
@@ -9,9 +21,11 @@ const STATUS_TEXT = {
   ready: "Senaste position är lagrad i webbläsaren.",
   unsupported: "Enheten kan inte hämta position.",
   insecure: "Position kan bara hämtas via localhost eller https.",
-  denied: "Tillstånd att hämta position nekades.",
-  unavailable: "Positionen gick inte att läsa från enheten.",
+  denied: "Tillstånd att hämta position saknas." + locationAdvice(),
+  unavailable: "Positionen gick inte att läsa från enheten. Kontrollera att platstjänster är på och tillåtna för webbläsaren.",
   timeout: "Hämtningen tog för lång tid och avbröts.",
+  blocked: "Webbläsaren frågade inte om position, eller så kom inget svar." + locationAdvice(),
+  policy: "Webbläsaren tillåter inte att den här sidan läser position.",
 };
 
 const DIALOG_TEXT = {
@@ -46,8 +60,8 @@ function statusPlate() {
     },
     get key() {
       const geo = this.geo;
+      if (geo.error) return geo.error;
       if (geo.checking && !geo.acquiring) return "checking";
-      if (geo.error && !geo.acquiring) return geo.error;
       if (geo.acquiring) return "acquiring";
       if (geo.polling) return "polling";
       if (hasPosition(geo)) return "ready";
@@ -61,8 +75,8 @@ function statusPlate() {
       const key = this.key;
       if (key === "checking" || key === "acquiring") return "acquiring";
       if (key === "polling") return "polling";
-      if (this.geo.error && !this.geo.acquiring) return "error";
-      return "idle";
+      if (key === "idle" || key === "ready") return "idle";
+      return "error";
     },
     get statusText() {
       return STATUS_TEXT[this.key] ?? STATUS_TEXT.idle;
@@ -146,8 +160,10 @@ function confirmDialog() {
     },
     allow() {
       const mode = this.$store.ui.mode;
-      this.$store.ui.close();
+      // Read position before closing. The tap has to reach getCurrentPosition
+      // in this same turn, or mobile Safari never shows its prompt.
       if (mode === "poll" || mode === "oneshot") this.$store.geo.request(mode);
+      this.$store.ui.close();
     },
     cancel() {
       this.$store.ui.close();

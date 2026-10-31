@@ -6,7 +6,7 @@
 // Cached responses are therefore returned without a network round-trip, and a
 // cache miss is abandoned after a short timeout.
 
-const CACHE_NAME = "offline-koordinater-v6";
+const CACHE_NAME = "offline-koordinater-v7";
 const NETWORK_TIMEOUT_MS = 4000;
 const PRECACHE_URLS = [
   "/",
