@@ -35,7 +35,7 @@ Position läses med hög noggrannhet, alltså GPS på enheten. Wifi- och mastpos
 1. Första besöket sparar hela sajten. Statusraden ska visa att länken är uppe, att värden nås och att cachen är aktiv.
 2. Stäng av nätverket och ladda om. Länken är nere, värden nås inte, cachen är aktiv.
 3. Med nätverk igång men värden blockerad (tunneln): länken är uppe, värden nås inte, sidan och senaste position finns kvar.
-4. På Start: **Hämta position**, bekräfta, och vänta in GPS. En indikator visas medan positionen hämtas.
+4. På Start: **Hämta position**, bekräfta, och vänta in GPS. En indikator visas medan positionen hämtas. Kommer ingen platsfråga, och inget läge, säger statusraden att Platstjänster eller webbläsarens tillstånd saknas.
 5. Öppna **Om** med en vanlig sidladdning. Senaste position ligger kvar.
 6. Reglaget **Polla position** läser positionen löpande. Byt sida eller flik: den synliga sidan tar över läsningen. Av stänger av pollningen.
 
@@ -80,21 +80,25 @@ Global position, via `Alpine.store("geo")`. Fälten som ska överleva en sidladd
 | `ok.acquiring` | Om en hämtning pågår och ännu inte fått träff eller fel |
 | `ok.acquiringSince` | När den pågående hämtningen började |
 | `ok.acquireMode` | `oneshot`, `poll` eller `null` |
-| `ok.error` | `denied`, `unavailable`, `timeout`, `unsupported`, `insecure` eller `null` |
+| `ok.error` | `denied`, `blocked`, `unavailable`, `timeout`, `unsupported`, `insecure`, `policy` eller `null` |
 
 `checking` och `immediate` ligger på storen men är inte persistade. De beskriver bara den sida som just nu frågar.
 
-Innan en hämtning startar avgör sidan själv, inte workern:
+Ett tryck på Tillåt anropar `getCurrentPosition` i samma tur, innan något `await`. Safari på iPhone visar ingen platsfråga om anropet görs efter en behörighetskoll eller ett Web Lock, och felcallbacken uteblir ofta också. Då händer ingenting på skärmen.
 
-- finns `navigator.geolocation`
+I samma tur, utan att vänta, kollar sidan:
+
+- finns `navigator.geolocation.getCurrentPosition`
 - är sammanhanget secure (`localhost` eller https)
-- är behörigheten redan `denied`, om Permissions API svarar
+- tillåter Permissions Policy `geolocation`
 
-Saknas Permissions API, eller kastar det (Firefox gör det ibland för geolocation), får anropet gå vidare. Då visar webbläsaren sin egen fråga. Nekad, saknad eller osäker position räknas som ett stoppande fel och slår av pollning.
+Permissions API frågas parallellt och får högst 2,5 sekunder på sig. Hänger det, eller kastar det (Firefox gör det ibland för geolocation), stoppar det inte läsningen. Säger det `denied` visas det direkt: Safari har ofta inget att fråga om när Platstjänster eller webbläsaren är av. Stannar läget på `prompt` eller uteblir svaret, och ingen träff kommer inom 10 sekunder, sparas `blocked`. Texten säger att man ska svara om en fråga faktiskt visas, och annars slå på Platstjänster och tillåta Safari.
 
-Själva läsningen är `getCurrentPosition` för ett engångsanrop och `watchPosition` medan pollning är på. Träffen normaliseras (ändliga tal, lat inom ±90, long inom ±180) och skrivs till storen. Persist speglar den till `localStorage`.
+`watchPosition` startar inte i samma tryck. Det väntar tills engångsanropet fått svar, så ett tidigt fel från klockan inte kan avbryta frågan. En sida som tar över en redan igång pollning börjar bevaka direkt. Nekad, blockerad, saknad policy, osäker eller otillgänglig position är ett synligt fel. Nekat, blockerat, policy, osäkert och en enhet utan API slår också av pollning.
 
-En hängande engångshämtning som fortfarande är markerad efter 120 sekunder blir `timeout` vid nästa sidladdning. Pollning får fortsätta; den är tänkt att vara långlivad.
+Träffen normaliseras (ändliga tal, lat inom ±90, long inom ±180) och skrivs till storen. Persist speglar den till `localStorage`.
+
+En hängande engångshämtning som fortfarande är markerad efter 120 sekunder blir `timeout` vid nästa sidladdning, om inget annat fel redan syns. Pollning får fortsätta; den är tänkt att vara långlivad.
 
 ### En läsare åt gången
 
@@ -118,10 +122,10 @@ Positionen väntar inte på workern och inte på att värden svarar. Cachen är 
 
 Komponenterna registreras med `Alpine.data` och används som `x-data="statusPlate"` och så vidare. De läser stores via `this.$store` och äger bara sitt eget DOM.
 
-- `statusPlate` väljer statustext, spinner, koordinater, tidsstämpel, länk, värd och cache. Prioritet: kontroll pågår, fel, hämtning, pollning, sparad position, tomt.
+- `statusPlate` väljer statustext, spinner, koordinater, tidsstämpel, länk, värd och cache. Prioritet: fel, kontroll pågår, hämtning, pollning, sparad position, tomt.
 - `fetchPosition` öppnar bekräftelsen. Är pollning redan på räcker det medgivandet, och knappen ber om en färsk träff direkt.
 - `pollSwitch` speglar `polling` till reglaget. På öppnar dialogen utan att slå på reglaget först. Av anropar `stopPolling()`.
-- `confirmDialog` öppnar den inbyggda `<dialog>` när `ui.mode` sätts, och stänger den på Avbryt, Tillåt eller Escape.
+- `confirmDialog` öppnar den inbyggda `<dialog>` när `ui.mode` sätts, och stänger den på Avbryt, Tillåt eller Escape. Tillåt startar hämtningen innan dialogen stängs, så trycket fortfarande räknas när positionen läses.
 
 ### `vendor/`
 
@@ -137,18 +141,20 @@ Utseende, lägen på statusplattan (`acquiring`, `polling`, `error`) och `[x-clo
 bekräftelse i sidan
         │
         ▼
-geo-store avgör om enheten kan läsa position
+synliga spärrar: API, https, permissions policy
         │
-        ├─ nej → fel sparas i localStorage, båda sidorna visar det
+        ├─ spärr → fel sparas i localStorage, båda sidorna visar det
         │
-        └─ ja → synlig sida tar Web Lock och anropar Geolocation
+        └─ annars → getCurrentPosition i samma tryck
                     │
-                    ▼
-              träff eller fel skrivs med Alpine.$persist
+                    ├─ behörighet frågas parallellt, med tidsgräns
                     │
-                    ▼
-              nästa dokument läser samma nycklar vid start
-              dolda flikar får storage-händelsen
+                    └─ träff, nekad eller utebliven fråga skrivs med Alpine.$persist
+                              │
+                              ▼
+                        nästa dokument läser samma nycklar vid start
+                        dolda flikar får storage-händelsen
 
+Web Lock väljer sedan vilken synlig sida som får fortsätta läsa.
 sw.js ligger vid sidan av det här och svarar bara på filhämtning
 ```
