@@ -41,7 +41,8 @@
           </div>
         </dl>
         <p class="runtime">
-          <span id="connectivity" x-text="connectivityText">Nätverk: online</span>
+          <span id="connectivity" x-text="linkText">Länk: uppe</span>
+          <span id="origin-state" x-text="originText">Värd: kontrolleras…</span>
           <span id="cache-state" x-text="cacheText">Offline-cache: installeras…</span>
         </p>
       </section>
@@ -55,8 +56,9 @@
           </p>
           <p>
             GPS kan bara läsas från en öppen sida. Service workern har inget geolocation-API,
-            därför cachelagrar den bara filerna och svarar med dem offline. Om pollning var igång
-            tar den synliga sidan över läsningen.
+            därför cachelagrar den bara filerna. Wifi, mobildata eller en VPN-tunnel kan vara uppe
+            utan att det publika internet går att nå. Då svarar workern från cachen, och positionen
+            läses lokalt. Om pollning var igång tar den synliga sidan över läsningen.
           </p>
         </div>
       </main>

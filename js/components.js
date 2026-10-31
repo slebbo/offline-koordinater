@@ -81,8 +81,13 @@ function statusPlate() {
     get updatedEmpty() {
       return Number.isFinite(this.geo.updatedAt) ? "false" : "true";
     },
-    get connectivityText() {
-      return this.offline.online ? "Nätverk: online" : "Nätverk: offline";
+    get linkText() {
+      return this.offline.link === "up" ? "Länk: uppe" : "Länk: nere";
+    },
+    get originText() {
+      if (this.offline.origin === "reachable") return "Värd: nås";
+      if (this.offline.origin === "unreachable") return "Värd: nås inte";
+      return "Värd: kontrolleras…";
     },
     get cacheText() {
       if (this.offline.cache === "active") return "Offline-cache: aktiv";

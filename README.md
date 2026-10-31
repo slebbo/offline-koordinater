@@ -2,7 +2,7 @@
 
 POC för att hämta enhetens position och visa den igen efter en vanlig sidladdning, även när nätet är avstängt.
 
-Sajten är statisk HTML, CSS och JavaScript utan byggsteg. Positionen läses i sidan. Service workern gör bara en sak: den gör själva filerna tillgängliga offline.
+Sajten är statisk HTML, CSS och JavaScript utan byggsteg. Positionen läses i sidan. Service workern gör bara en sak: den gör själva filerna tillgängliga utan det publika internet.
 
 ## Köra
 
@@ -12,28 +12,45 @@ Service workers fungerar inte från `file://`. Starta en statisk server i repots
 python3 -m http.server 8080
 ```
 
-Öppna `http://localhost:8080`. Första besöket måste ha nätverk så att cachen fylls. Därefter kan sidorna laddas om offline.
+Öppna `http://localhost:8080`. Första besöket måste nå värden så att cachen fylls. Därefter fungerar sidorna i en VPN-tunnel utan publikt internet, och med radiot avstängt.
+
+## Tunnel utan publikt internet
+
+Enheten kan ha wifi eller mobildata och ändå sakna det publika internet, för att trafiken går i en VPN-tunnel som inte släpper ut den. `navigator.onLine` är då sant: operativsystemet ser en länk. Anrop mot sajtens värd kan svart-hålas och hänga länge i stället för att fallera direkt.
+
+Därför skiljer statusraden på tre saker:
+
+- **Länk** är bara gränssnittet. Uppe betyder wifi, mobilnät eller VPN-adapter, inte att internet fungerar.
+- **Värd** är om den här sajtens server svarar. Sidan frågar med `?origin-probe=1`, workern rör inte den förfrågan, och den avbryts efter 2,5 sekunder. Svaret sparas inte, så en gammal träff inte ser ut som att tunneln når värden.
+- **Offline-cache** är om workern styr sidan. Den kan vara aktiv både när länken är nere och när länken är uppe men värden inte svarar.
+
+Workern svarar från precache utan att fråga nätet. En omladdning i tunneln väntar alltså inte på en värd som inte går att nå. Ett cache-miss får högst fyra sekunder mot nätet, sedan 503 eller den cachade sidan.
+
+Första besöket måste fortfarande nå värden en gång, så att precachen fylls. Uppdateringar likaså: de tas in när `CACHE_NAME` byts och värden går att nå. Inne i tunneln används den uppsättning som redan är sparad.
+
+Position läses med hög noggrannhet, alltså GPS på enheten. Wifi- och mastpositionering anropar ofta en tjänst på det publika internet och går inte att lita på här.
 
 ## Prova
 
-1. Första besöket sparar hela sajten.
-2. Stäng av nätverket och ladda om. Statusraden ska visa att nätet är offline och att cachen är aktiv.
-3. På Start: **Hämta position**, bekräfta, och vänta in GPS. En indikator visas medan positionen hämtas.
-4. Öppna **Om** med en vanlig sidladdning. Senaste position ligger kvar.
-5. Reglaget **Polla position** läser positionen löpande. Byt sida eller flik: den synliga sidan tar över läsningen. Av stänger av pollningen.
+1. Första besöket sparar hela sajten. Statusraden ska visa att länken är uppe, att värden nås och att cachen är aktiv.
+2. Stäng av nätverket och ladda om. Länken är nere, värden nås inte, cachen är aktiv.
+3. Med nätverk igång men värden blockerad (tunneln): länken är uppe, värden nås inte, sidan och senaste position finns kvar.
+4. På Start: **Hämta position**, bekräfta, och vänta in GPS. En indikator visas medan positionen hämtas.
+5. Öppna **Om** med en vanlig sidladdning. Senaste position ligger kvar.
+6. Reglaget **Polla position** läser positionen löpande. Byt sida eller flik: den synliga sidan tar över läsningen. Av stänger av pollningen.
 
 ## Varför uppdelningen ser ut så här
 
 Webbläsaren exponerar inte Geolocation API i en service worker. Där finns inte heller `localStorage`, och en behörighetsfråga kan inte visas därifrån. Den tidigare workern försökte ändå äga hela flödet: avgöra om en hämtning fick starta, lagra koordinater i IndexedDB och utse vilken flik som skulle läsa GPS. Det blev en egen tillståndsmaskin för något workern inte kan utföra själv.
 
-Det som är fördelaktigt med en service worker är ett annat problem: att svara på navigering när nätet är borta. `localStorage` kan lagra siffror, men inte fånga ett dokumentbyte till `about.html`. Cache API anropat från sidan kan spara svar, men inte intercepta själva sidladdningen. Utan worker blir en omladdning offline ett nätverksfel.
+Det som är fördelaktigt med en service worker är att svara på navigering när värden inte går att nå, även om en länk är uppe. `localStorage` kan lagra siffror, men inte fånga ett dokumentbyte till `about.html`. Cache API anropat från sidan kan spara svar, men inte intercepta själva sidladdningen. Utan worker blir en omladdning i tunneln ett hängande anrop.
 
 Andra worker-förmågor hjälper inte här:
 
 - Background Sync och Periodic Background Sync kan inte läsa GPS, och den senare finns knappt utanför Chromium.
 - Push har inget med en lokal position att göra.
 - Ett bibliotek som Workbox skulle bara kapsla in en precache på ett tiotal rader, och POC:n ska inte ha ett byggsteg.
-- Stale-while-revalidate kan uppdatera en fil i taget medan en annan ligger kvar. Sidan är ES-moduler. En blandning av gammal och ny kod går sönder tyst. En versionsatt cache byts ut i ett svep när `CACHE_NAME` ändras, så HTML, JS och CSS hör ihop.
+- Stale-while-revalidate kan uppdatera en fil i taget medan en annan ligger kvar. Sidan är ES-moduler. En blandning av gammal och ny kod går sönder tyst. Samma strategi skulle också öppna ett nätanrop per fil inne i tunneln, och ett svart hål kan lämna de anropen hängande. En versionsatt cache byts ut i ett svep när `CACHE_NAME` ändras, så HTML, JS och CSS hör ihop, och bara när värden faktiskt nås.
 
 Därför är workern cache-first och inget mer. Allt som rör position, bekräftelse och om pollning är på ligger i dokumentet, där API:erna faktiskt finns.
 
@@ -41,7 +58,7 @@ Därför är workern cache-first och inget mer. Allt som rör position, bekräft
 
 ### `sw.js`
 
-Installerar en precache av varje fil sajten behöver, tar över direkt (`skipWaiting` + `clients.claim`) och svarar på GET från samma origin med cache först. Saknas filen och nätet är nere får en navigering `index.html` eller den kända sidan, annars 503. Workern tar inte emot meddelanden och lagrar ingen position.
+Installerar en precache av varje fil sajten behöver, tar över direkt (`skipWaiting` + `clients.claim`) och svarar på GET från samma origin med cache först. Förfrågningar med `origin-probe` släpps igenom till nätet. Saknas filen väntar workern högst fyra sekunder på värden. Därefter får en navigering `index.html` eller den kända sidan, annars 503. Workern tar inte emot meddelanden och lagrar ingen position.
 
 När en fil läggs till, byter namn eller tas bort ska sökvägen in i `PRECACHE_URLS` och `CACHE_NAME` räknas upp i samma ändring. Det är så den gamla uppsättningen släpps.
 
@@ -89,19 +106,19 @@ Web Locks kräver secure context, samma krav som geolocation och service workers
 
 ### `js/offline-store.js`
 
-`Alpine.store("offline")` håller `online` (från `online` / `offline`) och `cache`:
+`Alpine.store("offline")` håller tre fält:
 
-- `installing` medan workern registreras och ännu inte styr sidan
-- `active` när `navigator.serviceWorker.controller` finns
-- `unavailable` om workern saknas eller registreringen misslyckas
+- `link` är `up` eller `down`, från `online` / `offline`. Det är bara om ett gränssnitt finns.
+- `origin` är `checking`, `reachable` eller `unreachable`. Proben körs vid start, när länken kommer upp, och när fliken blir synlig igen (högst var tionde sekund). En pågående kontroll slängs om länken hinner gå ner.
+- `cache` är `installing` tills workern styr sidan, sedan `active`, eller `unavailable` om registreringen misslyckas.
 
-Positionen väntar inte på workern. Offline-cachen är en status, inte en grind för GPS.
+Positionen väntar inte på workern och inte på att värden svarar. Cachen är en status, inte en grind för GPS.
 
 ### `js/components.js`
 
 Komponenterna registreras med `Alpine.data` och används som `x-data="statusPlate"` och så vidare. De läser stores via `this.$store` och äger bara sitt eget DOM.
 
-- `statusPlate` väljer statustext, spinner, koordinater, tidsstämpel, nät och cache. Prioritet: kontroll pågår, fel, hämtning, pollning, sparad position, tomt.
+- `statusPlate` väljer statustext, spinner, koordinater, tidsstämpel, länk, värd och cache. Prioritet: kontroll pågår, fel, hämtning, pollning, sparad position, tomt.
 - `fetchPosition` öppnar bekräftelsen. Är pollning redan på räcker det medgivandet, och knappen ber om en färsk träff direkt.
 - `pollSwitch` speglar `polling` till reglaget. På öppnar dialogen utan att slå på reglaget först. Av anropar `stopPolling()`.
 - `confirmDialog` öppnar den inbyggda `<dialog>` när `ui.mode` sätts, och stänger den på Avbryt, Tillåt eller Escape.

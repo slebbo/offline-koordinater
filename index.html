@@ -41,7 +41,8 @@
           </div>
         </dl>
         <p class="runtime">
-          <span id="connectivity" x-text="connectivityText">Nätverk: online</span>
+          <span id="connectivity" x-text="linkText">Länk: uppe</span>
+          <span id="origin-state" x-text="originText">Värd: kontrolleras…</span>
           <span id="cache-state" x-text="cacheText">Offline-cache: installeras…</span>
         </p>
       </section>
@@ -51,8 +52,8 @@
           <h1>Hämta position</h1>
           <p>
             Knappen ber om bekräftelse. Sidan läser sedan positionen och sparar den i webbläsaren,
-            så samma läge syns på sidan Om efter en vanlig sidladdning. Service workern håller bara
-            själva sajten tillgänglig när nätet är borta.
+            så samma läge syns på sidan Om efter en vanlig sidladdning. Service workern håller
+            sajten tillgänglig från cachen även när wifi eller VPN är uppe men värden inte går att nå.
           </p>
           <button class="action" type="button" id="fetch-position" x-data="fetchPosition" x-on:click="ask">Hämta position</button>
         </div>

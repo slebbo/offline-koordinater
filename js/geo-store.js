@@ -16,6 +16,9 @@ const PERSISTED_FIELDS = [
   "acquireMode",
   "error",
 ];
+// High accuracy asks the device for GPS. Wi-Fi and cell positioning often call a
+// location service on the public internet, which this POC does not have inside
+// its VPN tunnel.
 const ONESHOT_OPTIONS = { enableHighAccuracy: true, maximumAge: 0, timeout: 60000 };
 const WATCH_OPTIONS = { enableHighAccuracy: true, maximumAge: 5000, timeout: 60000 };
 const ERROR_CODES = { 1: "denied", 2: "unavailable", 3: "timeout" };
