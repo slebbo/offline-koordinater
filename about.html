@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="sv" translate="no">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="google" content="notranslate">
+    <title>Om · Offline-koordinater</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%231c1915'/%3E%3Ccircle cx='8' cy='8' r='2.5' fill='%23f7f4ec'/%3E%3C/svg%3E">
+    <link rel="stylesheet" href="./css/app.css">
+  </head>
+  <body>
+    <div class="site">
+      <header class="site-header">
+        <p class="brand">Offline-koordinater</p>
+        <nav class="site-nav" aria-label="Sidor">
+          <a href="./index.html">Start</a>
+          <a href="./about.html" aria-current="page">Om</a>
+        </nav>
+      </header>
+
+      <section class="status-plate" id="status-plate" aria-live="polite" aria-busy="false">
+        <p class="status-line">
+          <span class="spinner" id="spinner" hidden></span>
+          <span id="status-text">Ingen hämtning pågår.</span>
+        </p>
+        <dl class="readout">
+          <div>
+            <dt>Position (long, lat)</dt>
+            <dd id="position-value">Ingen position ännu</dd>
+          </div>
+          <div>
+            <dt>Senast uppdaterad</dt>
+            <dd id="updated-value">Inte uppdaterad</dd>
+          </div>
+        </dl>
+        <p class="runtime">
+          <span id="connectivity">Nätverk: online</span>
+          <span id="cache-state">Offline-cache: installeras…</span>
+        </p>
+      </section>
+
+      <main class="site-main">
+        <div class="sheet">
+          <h1>Om</h1>
+          <p>
+            Det här är en vanlig sidladdning, inte en vy i samma dokument. Service workern ligger kvar,
+            så pågående hämtning, pollning och senast lagrade position syns här också.
+          </p>
+          <p>
+            Själva GPS-anropet måste göras från den öppna sidan. Webbläsaren har inget geolocation-API
+            inuti en service worker. Workern tar emot anropet efter bekräftelsen, avgör om enheten kan
+            hämta position och lagrar resultatet.
+          </p>
+        </div>
+      </main>
+
+      <footer class="site-footer">
+        <label class="poll-switch">
+          <input id="poll-toggle" type="checkbox" role="switch" aria-describedby="poll-hint">
+          <span class="track" aria-hidden="true"><span class="thumb"></span></span>
+          <span>Polla position</span>
+        </label>
+        <p class="switch-hint" id="poll-hint">På läser positionen löpande. Av stoppar pollningen.</p>
+      </footer>
+    </div>
+
+    <dialog class="confirm-dialog" id="confirm-dialog" aria-labelledby="confirm-title">
+      <h2 id="confirm-title">Bekräfta position</h2>
+      <p id="confirm-text"></p>
+      <div class="dialog-actions">
+        <button type="button" id="confirm-cancel">Avbryt</button>
+        <button class="action" type="button" id="confirm-allow">Tillåt</button>
+      </div>
+    </dialog>
+    <script type="module" src="./js/page.js"></script>
+  </body>
+</html>
