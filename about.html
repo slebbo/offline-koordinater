@@ -18,24 +18,31 @@
         </nav>
       </header>
 
-      <section class="status-plate" id="status-plate" aria-live="polite" aria-busy="false">
+      <section
+        class="status-plate"
+        x-data="statusPlate"
+        x-cloak
+        x-bind:data-phase="phase"
+        x-bind:aria-busy="busy ? 'true' : 'false'"
+        aria-live="polite"
+      >
         <p class="status-line">
-          <span class="spinner" id="spinner" hidden></span>
-          <span id="status-text">Ingen hämtning pågår.</span>
+          <span class="spinner" x-show="busy"></span>
+          <span id="status-text" x-text="statusText">Ingen hämtning pågår.</span>
         </p>
         <dl class="readout">
           <div>
             <dt>Position (long, lat)</dt>
-            <dd id="position-value">Ingen position ännu</dd>
+            <dd id="position-value" x-text="positionText" x-bind:data-empty="positionEmpty">Ingen position ännu</dd>
           </div>
           <div>
             <dt>Senast uppdaterad</dt>
-            <dd id="updated-value">Inte uppdaterad</dd>
+            <dd id="updated-value" x-text="updatedText" x-bind:data-empty="updatedEmpty">Inte uppdaterad</dd>
           </div>
         </dl>
         <p class="runtime">
-          <span id="connectivity">Nätverk: online</span>
-          <span id="cache-state">Offline-cache: installeras…</span>
+          <span id="connectivity" x-text="connectivityText">Nätverk: online</span>
+          <span id="cache-state" x-text="cacheText">Offline-cache: installeras…</span>
         </p>
       </section>
 
@@ -43,20 +50,20 @@
         <div class="sheet">
           <h1>Om</h1>
           <p>
-            Det här är en vanlig sidladdning, inte en vy i samma dokument. Service workern ligger kvar,
-            så pågående hämtning, pollning och senast lagrade position syns här också.
+            Det här är en vanlig sidladdning, inte en vy i samma dokument. Senaste position,
+            pågående hämtning och om pollning är på ligger i localStorage, så de följer med hit.
           </p>
           <p>
-            Själva GPS-anropet måste göras från den öppna sidan. Webbläsaren har inget geolocation-API
-            inuti en service worker. Workern tar emot anropet efter bekräftelsen, avgör om enheten kan
-            hämta position och lagrar resultatet.
+            GPS kan bara läsas från en öppen sida. Service workern har inget geolocation-API,
+            därför cachelagrar den bara filerna och svarar med dem offline. Om pollning var igång
+            tar den synliga sidan över läsningen.
           </p>
         </div>
       </main>
 
-      <footer class="site-footer">
+      <footer class="site-footer" x-data="pollSwitch" x-cloak>
         <label class="poll-switch">
-          <input id="poll-toggle" type="checkbox" role="switch" aria-describedby="poll-hint">
+          <input id="poll-toggle" type="checkbox" role="switch" aria-describedby="poll-hint" x-ref="input" x-on:change="onChange($event)">
           <span class="track" aria-hidden="true"><span class="thumb"></span></span>
           <span>Polla position</span>
         </label>
@@ -64,14 +71,14 @@
       </footer>
     </div>
 
-    <dialog class="confirm-dialog" id="confirm-dialog" aria-labelledby="confirm-title">
+    <dialog class="confirm-dialog" id="confirm-dialog" x-data="confirmDialog" aria-labelledby="confirm-title">
       <h2 id="confirm-title">Bekräfta position</h2>
-      <p id="confirm-text"></p>
+      <p id="confirm-text" x-text="text"></p>
       <div class="dialog-actions">
-        <button type="button" id="confirm-cancel">Avbryt</button>
-        <button class="action" type="button" id="confirm-allow">Tillåt</button>
+        <button type="button" id="confirm-cancel" x-on:click="cancel">Avbryt</button>
+        <button class="action" type="button" id="confirm-allow" x-on:click="allow">Tillåt</button>
       </div>
     </dialog>
-    <script type="module" src="./js/page.js"></script>
+    <script type="module" src="./js/app.js"></script>
   </body>
 </html>
