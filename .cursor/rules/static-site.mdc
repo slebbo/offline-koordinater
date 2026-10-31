@@ -1,0 +1,16 @@
+---
+description: Static HTML site with modern JS and CSS and no build step
+alwaysApply: true
+---
+
+# Static site, no build step
+
+This repo is a static site. The browser loads the files directly.
+
+- Use modern HTML, CSS, and JavaScript only. ES modules, semantic HTML, and current CSS (custom properties, grid, nesting) are fine.
+- Do not add a framework, bundler, transpiler, or package build. No Vite, Webpack, Parcel, esbuild, Rollup, TypeScript compilation, Sass, or PostCSS.
+- Do not add an install or build script. There is no compile step.
+- `index.html` is the entry point. Load CSS with `<link>` and JS with `<script type="module">`.
+- Use relative URLs for every asset.
+- Commit third-party code under `vendor/` and reference those files locally. No runtime CDN, Google Fonts, remote module imports, or unpkg/jsDelivr URLs.
+- A static file server is fine for local preview. Service workers do not run from `file://`.

@@ -1,0 +1,10 @@
+---
+description: User-facing language may be Swedish; code and comments stay English
+alwaysApply: true
+---
+
+# Language
+
+- Chat replies, documentation, and UI copy may be Swedish.
+- Write source code, identifiers, filenames, CSS class names, and code comments in English.
+- Do not put Swedish words in code, comments, or class names.

@@ -1,0 +1,15 @@
+---
+description: Offline POC; the service worker must cache all code and dependencies
+alwaysApply: true
+---
+
+# Offline
+
+The POC must keep working with the network disabled after the service worker has installed.
+
+- Register a service worker from the site root (`sw.js`) so its scope covers the whole app.
+- Precache every file the app needs: HTML, CSS, JS, images, fonts, data files, and everything in `vendor/`.
+- On install, cache that full list. Serve cached responses while offline. App code and libraries must not depend on a network fetch.
+- When you add, rename, or remove a file or dependency, update the precache list in the same change and bump the cache name.
+- Do not call remote APIs for core behavior. If a feature needs data, ship that data in the repo and cache it.
+- Verify offline by loading the site once so the worker installs, then disabling the network and reloading. The full UI must still work.
