@@ -16,9 +16,11 @@ const PERSISTED_FIELDS = [
   "acquireMode",
   "error",
 ];
-// High accuracy asks the device for GPS. Wi-Fi and cell positioning often call a
-// location service on the public internet, which this POC does not have inside
-// its VPN tunnel.
+// High accuracy asks the device for GPS. Chrome still starts its network
+// location provider in parallel and POSTs to
+// https://www.googleapis.com/geolocation/v1/geolocate from the browser process.
+// Page script cannot cancel that request, and there is no GPS-only web API.
+// On a phone a GPS fix can still arrive while the request times out.
 const ONESHOT_OPTIONS = { enableHighAccuracy: true, maximumAge: 0, timeout: 60000 };
 const WATCH_OPTIONS = { enableHighAccuracy: true, maximumAge: 5000, timeout: 60000 };
 const ERROR_CODES = { 1: "denied", 2: "unavailable", 3: "timeout" };

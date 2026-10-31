@@ -84,11 +84,6 @@ function statusPlate() {
     get linkText() {
       return this.offline.link === "up" ? "Länk: uppe" : "Länk: nere";
     },
-    get originText() {
-      if (this.offline.origin === "reachable") return "Värd: nås";
-      if (this.offline.origin === "unreachable") return "Värd: nås inte";
-      return "Värd: kontrolleras…";
-    },
     get cacheText() {
       if (this.offline.cache === "active") return "Offline-cache: aktiv";
       if (this.offline.cache === "unavailable") return "Offline-cache: inte tillgänglig";
