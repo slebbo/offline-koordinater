@@ -78,6 +78,8 @@ export function PositionTab() {
 }
 ```
 
+En egen Alpine-vy, med global store och persist, beskrivs i avsnittet Alpine.
+
 ### Bara visa läget
 
 ```js
@@ -133,6 +135,278 @@ startCoordinates({
 Flera flikar delar `localStorage`, men bara en anropar GPS. Den synliga sidan tar ett exklusivt Web Lock, `offline-koordinater-geo`. Låset släpps när sidan döljs, navigerar bort eller stänger av pollningen. Webbläsaren släpper det också om dokumentet försvinner. Nästa synliga sida läser `polling` och `acquireMode` och fortsätter. Saknas Web Locks läser sidan ändå, utan flik-lås.
 
 `storagePrefix` och `lockName` kan bara sättas av det första anropet i dokumentet. Ett senare anrop med `requestAccessOnLoad: true` frågar ändå, en gång, om det första inte gjorde det.
+
+### Alpine
+
+GPS, flik-lås och nycklarna `ok.*` stannar i modulen. Alpine är lagret som gör samma fält globala: `Alpine.store("coordinates")` och `$store.coordinates` i vilken komponent som helst. `@alpinejs/persist` läser och skriver samma nycklar, så det blir en post per fält.
+
+I Vite-appen:
+
+```bash
+npm install alpinejs @alpinejs/persist
+```
+
+Den här POC:n lämnar Alpine till appen som bäddar in modulen. Alpines vanliga bygge, paketet `alpinejs`, utvärderar uttryck med `new Function`. Har appen en Content-Security-Policy utan `'unsafe-eval'` importerar du `@alpinejs/csp`. Persist-pluginet är detsamma. Exemplen registrerar `Alpine.data` i JS-filer. Mallarna läser fält, anropar metoder och binder `hidden`.
+
+`Alpine.plugin(persist)` ska köras innan storen skapas, annars finns inte `Alpine.$persist`. `startCoordinates()` ska köras innan storen anropar `getCoordinates()`.
+
+```js
+import Alpine from "alpinejs";
+import persist from "@alpinejs/persist";
+import { startCoordinates } from "./coordinates/index.js";
+import { registerCoordinatesStore } from "./coordinates-store.js";
+import { registerCoordinatesData } from "./coordinates-data.js";
+
+startCoordinates({
+  requestAccessOnLoad: true,
+});
+
+Alpine.plugin(persist);
+
+// Dialog mode only. A reload should not reopen the dialog.
+Alpine.store("ui", {
+  mode: null,
+  open(mode) {
+    this.mode = mode;
+  },
+  close() {
+    this.mode = null;
+  },
+});
+
+registerCoordinatesStore(Alpine);
+registerCoordinatesData(Alpine);
+Alpine.start();
+```
+
+Byter layouten `storagePrefix` ska samma prefix in i `.as(...)` nedan. `ui` finns bara i minnet.
+
+#### Store
+
+```js
+import { getCoordinates } from "./coordinates/index.js";
+
+const FIELDS = [
+  "longitude",
+  "latitude",
+  "updatedAt",
+  "polling",
+  "acquiring",
+  "acquiringSince",
+  "acquireMode",
+  "error",
+];
+
+export function registerCoordinatesStore(Alpine) {
+  const coordinates = getCoordinates();
+  const prefix = "ok";
+
+  Alpine.store("coordinates", {
+    longitude: Alpine.$persist(null).as(`${prefix}.longitude`),
+    latitude: Alpine.$persist(null).as(`${prefix}.latitude`),
+    updatedAt: Alpine.$persist(null).as(`${prefix}.updatedAt`),
+    polling: Alpine.$persist(false).as(`${prefix}.polling`),
+    acquiring: Alpine.$persist(false).as(`${prefix}.acquiring`),
+    acquiringSince: Alpine.$persist(null).as(`${prefix}.acquiringSince`),
+    acquireMode: Alpine.$persist(null).as(`${prefix}.acquireMode`),
+    error: Alpine.$persist(null).as(`${prefix}.error`),
+
+    request(mode) {
+      coordinates.request(mode);
+    },
+    refreshNow() {
+      coordinates.refreshNow();
+    },
+    stopPolling() {
+      coordinates.stopPolling();
+    },
+  });
+
+  // Same-document writes do not emit a storage event. Copy the module
+  // snapshot into the store. Skip equal values so Persist does not write
+  // the key again and bounce the other tab.
+  coordinates.subscribe((state) => {
+    const store = Alpine.store("coordinates");
+    for (const field of FIELDS) {
+      if (Object.is(store[field], state[field])) continue;
+      store[field] = state[field];
+    }
+  });
+}
+```
+
+Persist fyller storen när den skapas, innan `Alpine.start()` ritar. En sida utan reglage visar alltså senaste träff direkt. Prenumerationen håller storen ikapp när modulen får en ny träff i samma dokument. Andra flikar får modulens `storage`-händelse, som i sin tur uppdaterar deras store.
+
+Storens metoder anropar modulen och är vanliga funktioner. `request` och `refreshNow` måste nå `getCurrentPosition` i samma tur som klicket, annars visar Safari ingen platsfråga.
+
+Vilken vy som helst läser samma global. Registrera `Alpine.data` före `Alpine.start()`:
+
+```html
+<p x-data="positionLabel" x-text="label"></p>
+```
+
+```js
+Alpine.data("positionLabel", () => ({
+  get label() {
+    const { longitude, latitude } = this.$store.coordinates;
+    if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) return "Ingen position ännu";
+    return `${longitude.toFixed(6)}, ${latitude.toFixed(6)}`;
+  },
+}));
+```
+
+Utanför en komponent:
+
+```js
+const coordinates = Alpine.store("coordinates");
+coordinates.latitude;
+coordinates.longitude;
+```
+
+`coordinates.request("oneshot")` hör hemma i klickhanteraren, inte i en fri funktion som anropas efter en `await`.
+
+#### Komponenter
+
+`mountCoordinatesPanel` ritar modulens egen panel. Alpine-komponenterna är vyn när reglagen ska ligga i appens mall. Layouten har redan kallat `startCoordinates()`. Länka `js/coordinates/panel.css` om klasserna ska se ut som i POC:n. `[x-cloak] { display: none !important; }` döljer fallback-texten tills Alpine har läst `localStorage`.
+
+Texterna kommer från `describeCoordinates` i `js/coordinates/status.js`.
+
+```js
+import { describeCoordinates } from "./coordinates/status.js";
+
+const DIALOG_TEXT = {
+  oneshot:
+    "Får enheten hämta position en gång? Träffen sparas i webbläsaren. Du kan byta sida medan hämtningen pågår.",
+  poll: "Får enheten hämta position löpande? Reglaget stänger av pollningen, även om du har bytt sida.",
+};
+
+export function registerCoordinatesData(Alpine) {
+  Alpine.data("coordinatesReadout", coordinatesReadout);
+  Alpine.data("fetchPosition", fetchPosition);
+  Alpine.data("pollSwitch", pollSwitch);
+  Alpine.data("confirmDialog", confirmDialog);
+}
+
+function coordinatesReadout() {
+  return {
+    get view() {
+      return describeCoordinates(this.$store.coordinates);
+    },
+    get spinnerHidden() {
+      return !this.view.busy;
+    },
+    get busyValue() {
+      return this.view.busy ? "true" : "false";
+    },
+  };
+}
+
+function fetchPosition() {
+  return {
+    ask() {
+      const coordinates = this.$store.coordinates;
+      if (coordinates.polling) {
+        coordinates.refreshNow();
+        return;
+      }
+      this.$store.ui.open("oneshot");
+    },
+  };
+}
+
+function pollSwitch() {
+  return {
+    init() {
+      this.$refs.input.checked = Boolean(this.$store.coordinates.polling);
+      this.$watch("$store.coordinates.polling", (value) => {
+        this.$refs.input.checked = Boolean(value);
+      });
+    },
+    onChange(event) {
+      if (event.target.checked) {
+        event.target.checked = false;
+        this.$store.ui.open("poll");
+        return;
+      }
+      this.$store.coordinates.stopPolling();
+    },
+  };
+}
+
+function confirmDialog() {
+  return {
+    init() {
+      const dialog = this.$el;
+      this.$watch("$store.ui.mode", (mode) => {
+        if (mode && !dialog.open) dialog.showModal();
+        if (!mode && dialog.open) dialog.close();
+      });
+      dialog.addEventListener("close", () => {
+        if (this.$store.ui.mode) this.$store.ui.close();
+      });
+    },
+    get text() {
+      return DIALOG_TEXT[this.$store.ui.mode] ?? "";
+    },
+    allow() {
+      const mode = this.$store.ui.mode;
+      // Reach getCurrentPosition in this turn, before the dialog closes.
+      if (mode === "poll" || mode === "oneshot") this.$store.coordinates.request(mode);
+      this.$store.ui.close();
+    },
+    cancel() {
+      this.$store.ui.close();
+    },
+  };
+}
+```
+
+```html
+<section
+  class="coordinates"
+  x-data="coordinatesReadout"
+  x-cloak
+  x-bind:data-phase="view.phase"
+  x-bind:aria-busy="busyValue"
+  aria-label="Enhetens position"
+>
+  <p class="coordinates-status">
+    <span class="coordinates-spinner" x-bind:hidden="spinnerHidden"></span>
+    <span class="coordinates-status-text" x-text="view.statusText">Ingen hämtning pågår.</span>
+  </p>
+  <dl class="coordinates-readout">
+    <div>
+      <dt>Position (long, lat)</dt>
+      <dd class="coordinates-position" x-text="view.positionText" x-bind:data-empty="view.positionEmpty">Ingen position ännu</dd>
+    </div>
+    <div>
+      <dt>Senast uppdaterad</dt>
+      <dd class="coordinates-updated" x-text="view.updatedText" x-bind:data-empty="view.updatedEmpty">Inte uppdaterad</dd>
+    </div>
+  </dl>
+  <div class="coordinates-controls">
+    <button class="coordinates-action" type="button" x-data="fetchPosition" x-on:click="ask">Hämta position</button>
+    <div x-data="pollSwitch">
+      <label class="coordinates-switch">
+        <input class="coordinates-switch-input" type="checkbox" role="switch" x-ref="input" x-on:change="onChange($event)">
+        <span class="coordinates-track" aria-hidden="true"><span class="coordinates-thumb"></span></span>
+        <span>Polla position</span>
+      </label>
+    </div>
+  </div>
+</section>
+
+<dialog class="coordinates-dialog" x-data="confirmDialog">
+  <h2 class="coordinates-dialog-title">Bekräfta position</h2>
+  <p class="coordinates-dialog-text" x-text="text"></p>
+  <div class="coordinates-dialog-actions">
+    <button type="button" x-on:click="cancel">Avbryt</button>
+    <button class="coordinates-action" type="button" x-on:click="allow">Tillåt</button>
+  </div>
+</dialog>
+```
+
+Låt poll-reglaget vara en egen checkbox. `polling` sätts i `request("poll")` först när dialogen fått ett ja. `x-model` på `polling` skulle spara flaggan innan dess. Avläsning utan reglage är `coordinatesReadout` ensam. `error` är samma koder som i avsnittet Eget gränssnitt.
 
 ## Köra POC:n
 
