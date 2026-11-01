@@ -148,23 +148,26 @@ Första besöket måste nå värden så att cachen fylls. Därefter fungerar sid
 
 ## Tunnel utan publikt internet
 
-Enheten kan ha wifi eller mobildata och ändå sakna det publika internet, för att trafiken går i en VPN-tunnel som inte släpper ut den. `navigator.onLine` är då sant: operativsystemet ser en länk. Anrop mot sajtens värd kan svart-hålas och hänga länge i stället för att fallera direkt.
+Enheten kan ha wifi eller mobildata och ändå sakna det publika internet, för att trafiken går i en VPN-tunnel som inte släpper ut den. `navigator.onLine` är då sant: operativsystemet ser en länk. Anrop mot sajtens värd, och mot allt utanför tunneln, svart-hålas och hänger tills de får timeout.
 
-Därför skiljer statusraden i POC:n på tre saker. Den raden hör inte till modulen.
+Sidan startar inga egna nätanrop. Ingen värdprob. Statusraden i POC:n hör inte till modulen och visar två saker som går att veta utan att fråga nätet:
 
-- **Länk** är bara gränssnittet. Uppe betyder wifi, mobilnät eller VPN-adapter, inte att internet fungerar.
-- **Värd** är om den här sajtens server svarar. Sidan frågar med `?origin-probe=1`, workern rör inte den förfrågan, och den avbryts efter 2,5 sekunder. Svaret sparas inte.
+- **Länk** är bara gränssnittet. Uppe betyder wifi, mobilnät eller VPN-adapter, inte att internet fungerar och inte att värden svarar.
 - **Offline-cache** är om workern styr sidan. Den kan vara aktiv både när länken är nere och när länken är uppe men värden inte svarar.
 
 Workern svarar från precache utan att fråga nätet. En omladdning i tunneln väntar alltså inte på en värd som inte går att nå. Ett cache-miss får högst fyra sekunder mot nätet, sedan 503 eller den cachade sidan.
+
+En meta-`Content-Security-Policy` låser skript, stil, bilder och `connect-src` till den egna värden (`'self'`), plus `data:` för ikonen. Modulen bygger inga uttryck med `eval`, så `'unsafe-eval'` ingår inte.
+
+När sidan anropar Geolocation API kan Chrome på en dator själv skicka ett POST till `https://www.googleapis.com/geolocation/v1/geolocate`. Anropet görs av webbläsarprocessen, inte av sidans `fetch`, och en Content-Security-Policy når det inte. På Android frågar Chrome telefonens platstjänst. En GPS-träff kan komma även när Googles nätpositionering misslyckas, om exakt position och GPS är på.
 
 Positionen väntar inte på workern och inte på att värden svarar. Modulen läser GPS lokalt.
 
 ## Prova
 
-1. Första besöket sparar hela sajten. Statusraden ska visa att länken är uppe, att värden nås och att cachen är aktiv.
-2. Stäng av nätverket och ladda om. Länken är nere, värden nås inte, cachen är aktiv. Panelen finns kvar.
-3. Med nätverk igång men värden blockerad (tunneln): länken är uppe, värden nås inte, sidan och senaste position finns kvar.
+1. Första besöket sparar hela sajten. Statusraden ska visa att länken är uppe och att cachen är aktiv. Nätverksloggen från sidan ska inte innehålla `origin-probe`.
+2. Stäng av nätverket och ladda om. Länken är nere, cachen är aktiv. Panelen finns kvar.
+3. Med wifi eller VPN uppe men värden oåtkomlig: länken är fortfarande uppe, cachen är aktiv, sidan och senaste position finns kvar. Sidan gör ingen värdprob.
 4. På Min sida: **Hämta position**, bekräfta, och vänta in GPS. Kommer ingen platsfråga, och inget läge, säger panelen att Platstjänster eller webbläsarens tillstånd saknas.
 5. Öppna **Annan sida** med en vanlig sidladdning. Senaste position ligger kvar. Där finns inga reglage.
 6. Reglaget **Polla position** på Min sida läser positionen löpande. Byt till Annan sida eller en annan flik: den synliga sidan tar över läsningen. Av, på Min sida, stänger av pollningen.
@@ -193,7 +196,7 @@ Position läses med hög noggrannhet, alltså GPS på enheten. Wifi- och mastpos
 
 ## Offline-cachen i POC:n
 
-`sw.js` installerar en precache av varje fil sajten behöver, tar över direkt (`skipWaiting` + `clients.claim`) och svarar på GET från samma origin med cache först. Förfrågningar med `origin-probe` släpps igenom till nätet. Saknas filen väntar workern högst fyra sekunder på värden. Därefter får en navigering `index.html` eller den kända sidan, annars 503. Workern tar inte emot meddelanden och lagrar ingen position.
+`sw.js` installerar en precache av varje fil sajten behöver, tar över direkt (`skipWaiting` + `clients.claim`) och svarar på GET från samma origin med cache först. Saknas filen väntar workern högst fyra sekunder på värden. Därefter får en navigering `index.html` eller den kända sidan, annars 503. Workern tar inte emot meddelanden, lagrar ingen position och släpper inte igenom en prob mot värden.
 
 När en fil läggs till, byter namn eller tas bort ska sökvägen in i `PRECACHE_URLS` och `CACHE_NAME` räknas upp i samma ändring.
 
@@ -209,7 +212,7 @@ Andra worker-förmågor hjälper inte positionen. Background Sync kan inte läsa
 | `js/coordinates/status.js` | Texterna i panelen |
 | `js/coordinates/panel.css` | Utseende för panelen. Variabler faller tillbaka om värden inte sätter `--ink`, `--sheet` och de andra |
 | `js/app.js` | POC:ns layout. Startar motorn på varje sida och monterar det markup ber om |
-| `js/offline-status.js` | POC:ns länk, värd och cache. Inte en del av modulen |
+| `js/offline-status.js` | POC:ns länk och cache. Inte en del av modulen |
 | `sw.js` | POC:ns offline-cache |
 | `index.html` | Min sida, med reglage |
 | `about.html` | Annan sida, bara avläsning |

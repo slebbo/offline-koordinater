@@ -25,8 +25,11 @@ const PERSISTED_FIELDS = [
   "error",
 ];
 const TRACKING_FIELDS = new Set(["polling", "acquiring", "acquireMode"]);
-// High accuracy asks the device for GPS. Wi-Fi and cell positioning often
-// call a location service on the public internet.
+// High accuracy asks the device for GPS. Desktop Chrome still starts its
+// network location provider in parallel and POSTs to
+// https://www.googleapis.com/geolocation/v1/geolocate from the browser process.
+// Page script cannot cancel that request. Android Chrome asks the platform
+// location service instead, so a GPS fix can arrive while that request fails.
 const ONESHOT_OPTIONS = { enableHighAccuracy: true, maximumAge: 0, timeout: 60000 };
 const WATCH_OPTIONS = { enableHighAccuracy: true, maximumAge: 5000, timeout: 60000 };
 const ERROR_CODES = { 1: "denied", 2: "unavailable", 3: "timeout" };
