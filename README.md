@@ -115,15 +115,15 @@ coordinates.stopPolling();
 
 | Nyckel | Innehåll |
 | --- | --- |
-| `ok.longitude`, `ok.latitude` | Senaste godkända koordinater |
-| `ok.updatedAt` | Tidsstämpel från GPS-träffen, i millisekunder |
-| `ok.polling` | Om löpande läsning är på |
-| `ok.acquiring` | Om en hämtning pågår |
-| `ok.acquiringSince` | När den pågående hämtningen började |
-| `ok.acquireMode` | `oneshot`, `poll` eller `null` |
-| `ok.error` | Felkoden ovan, eller `null` |
+| `koordinater.longitude`, `koordinater.latitude` | Senaste godkända koordinater |
+| `koordinater.updatedAt` | Tidsstämpel från GPS-träffen, i millisekunder |
+| `koordinater.polling` | Om löpande läsning är på |
+| `koordinater.acquiring` | Om en hämtning pågår |
+| `koordinater.acquiringSince` | När den pågående hämtningen började |
+| `koordinater.acquireMode` | `oneshot`, `poll` eller `null` |
+| `koordinater.error` | Felkoden ovan, eller `null` |
 
-Prefixet `ok` är standard så att en tidigare träff i den här POC:n fortfarande läses. Byt det om nycklarna kan krocka:
+Prefixet `koordinater` är standard. Byt det om nycklarna kan krocka:
 
 ```js
 startCoordinates({
@@ -138,7 +138,7 @@ Flera flikar delar `localStorage`, men bara en anropar GPS. Den synliga sidan ta
 
 ### Alpine
 
-GPS, flik-lås och nycklarna `ok.*` stannar i modulen. Alpine är lagret som gör samma fält globala: `Alpine.store("coordinates")` och `$store.coordinates` i vilken komponent som helst. `@alpinejs/persist` läser och skriver samma nycklar, så det blir en post per fält.
+GPS, flik-lås och nycklarna `koordinater.*` stannar i modulen. Alpine är lagret som gör samma fält globala: `Alpine.store("coordinates")` och `$store.coordinates` i vilken komponent som helst. `@alpinejs/persist` läser och skriver samma nycklar, så det blir en post per fält.
 
 I Vite-appen:
 
@@ -199,7 +199,7 @@ const FIELDS = [
 
 export function registerCoordinatesStore(Alpine) {
   const coordinates = getCoordinates();
-  const prefix = "ok";
+  const prefix = "koordinater";
 
   Alpine.store("coordinates", {
     longitude: Alpine.$persist(null).as(`${prefix}.longitude`),

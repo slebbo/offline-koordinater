@@ -13,7 +13,7 @@ const ACQUIRE_STALE_MS = 120000;
 const PERMISSION_QUERY_MS = 2500;
 const PROMPT_STALL_MS = 10000;
 const DEFAULT_LOCK_NAME = "offline-koordinater-geo";
-const DEFAULT_PREFIX = "ok";
+const DEFAULT_PREFIX = "koordinater";
 const PERSISTED_FIELDS = [
   "longitude",
   "latitude",
@@ -71,7 +71,7 @@ const GLOBAL_SLOT = "__offlineKoordinater";
  *   browser still needs a user gesture to show the prompt (Safari, and
  *   every browser on iPhone and iPad), a pending prompt is skipped and the
  *   controls remain the way to ask.
- * @property {string} [storagePrefix="ok"]
+ * @property {string} [storagePrefix="koordinater"]
  * @property {string} [lockName="offline-koordinater-geo"]
  * @typedef {Object} CoordinatesController
  * @property {() => CoordinatesState} getState
