@@ -6,7 +6,7 @@
 // Cached responses are therefore returned without a network round-trip, and a
 // cache miss is abandoned after a short timeout.
 
-const CACHE_NAME = "offline-koordinater-v7";
+const CACHE_NAME = "offline-koordinater-v8";
 const NETWORK_TIMEOUT_MS = 4000;
 const PRECACHE_URLS = [
   "/",
@@ -14,11 +14,12 @@ const PRECACHE_URLS = [
   "/about.html",
   "/css/app.css",
   "/js/app.js",
-  "/js/geo-store.js",
-  "/js/offline-store.js",
-  "/js/components.js",
-  "/vendor/alpinejs/module.esm.js",
-  "/vendor/@alpinejs/persist/module.esm.js",
+  "/js/offline-status.js",
+  "/js/coordinates/index.js",
+  "/js/coordinates/engine.js",
+  "/js/coordinates/panel.js",
+  "/js/coordinates/status.js",
+  "/js/coordinates/panel.css",
 ];
 
 self.addEventListener("install", (event) => {
@@ -58,7 +59,10 @@ function fetchFromNetwork(request) {
 
 async function fromCache(request) {
   const cache = await caches.open(CACHE_NAME);
-  const cached = await cache.match(request);
+  const url = new URL(request.url);
+  // Query strings are not separate files. A page opened as index.html?request-access
+  // must still come from the precache, including inside the tunnel.
+  const cached = (await cache.match(request)) || (await cache.match(url.pathname));
   if (cached) return cached;
   try {
     const response = await fetchFromNetwork(request);
