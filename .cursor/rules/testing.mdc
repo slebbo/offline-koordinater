@@ -1,0 +1,15 @@
+---
+description: Verify behavior programmatically; skip screenshots and recordings unless asked
+alwaysApply: true
+---
+
+# Testing
+
+Visual checks are slow. Do not inspect how the page looks unless the user explicitly asks.
+
+- Do not take screenshots, record the screen, compare layouts, or review pixels, spacing, colors, or viewports.
+- Do not produce walkthrough artifacts, demo videos, or cropped frames to judge appearance.
+- Do verify the behavior you changed. Load the page, click and type through that flow, and assert the resulting state: text, attributes, dialogs, and stored values.
+- Fail the check if the browser console reports an error or an uncaught exception.
+- A headless script that drives the page is enough. Desktop and mobile visual passes are out of scope.
+- The offline reload check is the same kind of check: install the worker, disable the network, reload, and assert that the page still responds and the console stays clean.

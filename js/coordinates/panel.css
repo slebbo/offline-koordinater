@@ -1,0 +1,212 @@
+.coordinates {
+  --coordinates-ink: var(--ink, #1c1915);
+  --coordinates-sheet: var(--sheet, #f7f4ec);
+  --coordinates-muted: var(--muted, #5e584e);
+  --coordinates-signal: var(--signal, #b8431f);
+  --coordinates-live: var(--live, #1d6b45);
+  --coordinates-line: var(--line, #1c1915);
+  box-sizing: border-box;
+  margin-top: 1rem;
+  padding: 1rem 1rem 0.85rem;
+  color: var(--coordinates-ink);
+  background: var(--coordinates-sheet);
+  border: 1px solid var(--coordinates-line);
+  box-shadow: 4px 4px 0 var(--coordinates-line);
+  line-height: 1.45;
+  font: inherit;
+}
+
+.coordinates *,
+.coordinates *::before,
+.coordinates *::after { box-sizing: border-box; }
+
+.coordinates[data-phase="acquiring"] { border-color: var(--coordinates-signal); }
+.coordinates[data-phase="polling"] { border-color: var(--coordinates-live); }
+.coordinates[data-phase="error"] .coordinates-status { color: var(--coordinates-signal); }
+
+.coordinates-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  min-height: 1.5rem;
+  margin: 0 0 0.8rem;
+  font-weight: 650;
+}
+
+.coordinates-status-text { min-width: 0; }
+
+.coordinates-spinner {
+  display: inline-block;
+  width: 0.9rem;
+  height: 0.9rem;
+  margin-top: 0.2rem;
+  flex: none;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: coordinates-spin 0.7s linear infinite;
+}
+
+.coordinates-spinner[hidden] { display: none; }
+
+.coordinates-readout {
+  display: grid;
+  gap: 0.85rem;
+  margin: 0;
+}
+
+.coordinates-readout div { display: grid; gap: 0.15rem; }
+
+.coordinates-readout dt {
+  margin: 0;
+  color: var(--coordinates-muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.coordinates-readout dd {
+  margin: 0;
+  font-family: ui-monospace, monospace;
+  font-size: clamp(1.15rem, 3.4vw, 1.85rem);
+  letter-spacing: -0.03em;
+  overflow-wrap: anywhere;
+}
+
+.coordinates-readout dd[data-empty="true"] {
+  font-family: inherit;
+  font-size: 1.05rem;
+  letter-spacing: 0;
+}
+
+.coordinates-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.85rem 1rem;
+  margin-top: 1rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--coordinates-line);
+}
+
+.coordinates-action {
+  appearance: none;
+  border: 1px solid var(--coordinates-line);
+  background: var(--coordinates-ink);
+  color: var(--coordinates-sheet);
+  box-shadow: 4px 4px 0 var(--coordinates-signal);
+  padding: 0.75rem 1rem;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.coordinates-action:hover { transform: translate(-1px, -1px); }
+.coordinates-action:active { transform: translate(2px, 2px); box-shadow: none; }
+
+.coordinates-switch {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.coordinates-switch-input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+}
+
+.coordinates-track {
+  width: 3.4rem;
+  height: 1.9rem;
+  border: 1px solid var(--coordinates-line);
+  background: #cfc8b8;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem;
+}
+
+.coordinates-thumb {
+  width: 1.45rem;
+  height: 1.45rem;
+  background: var(--coordinates-sheet);
+  border: 1px solid var(--coordinates-line);
+  transform: translateX(0);
+}
+
+.coordinates-switch-input:checked + .coordinates-track { background: var(--coordinates-live); }
+
+.coordinates-switch-input:checked + .coordinates-track .coordinates-thumb {
+  transform: translateX(1.45rem);
+}
+
+.coordinates-switch-input:focus-visible + .coordinates-track,
+.coordinates-action:focus-visible,
+.coordinates-dialog-actions button:focus-visible {
+  outline: 3px solid var(--coordinates-signal);
+  outline-offset: 2px;
+}
+
+.coordinates-hint {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--coordinates-muted);
+  font-size: 0.85rem;
+}
+
+.coordinates-dialog {
+  border: 1px solid var(--coordinates-line);
+  background: var(--coordinates-sheet);
+  color: var(--coordinates-ink);
+  box-shadow: 6px 6px 0 var(--coordinates-line);
+  padding: 1.1rem;
+  width: min(28rem, calc(100vw - 2rem));
+}
+
+.coordinates-dialog::backdrop { background: rgb(28 25 21 / 45%); }
+
+.coordinates-dialog-title { margin: 0; font-size: 1.25rem; }
+.coordinates-dialog p { margin: 0.6rem 0 0; }
+
+.coordinates-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.coordinates-dialog-actions button {
+  font: inherit;
+  border: 1px solid var(--coordinates-line);
+  background: var(--coordinates-sheet);
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+}
+
+.coordinates-dialog .coordinates-action {
+  margin-top: 0;
+  background: var(--coordinates-ink);
+  color: var(--coordinates-sheet);
+}
+
+@media (max-width: 640px) {
+  .coordinates-controls {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .coordinates-spinner { animation: none; border-right-color: currentColor; }
+  .coordinates-action:hover,
+  .coordinates-action:active { transform: none; }
+}
+
+@keyframes coordinates-spin {
+  to { transform: rotate(360deg); }
+}
