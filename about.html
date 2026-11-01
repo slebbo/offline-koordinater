@@ -25,15 +25,33 @@
         <span data-offline-cache>Offline-cache: installeras…</span>
       </p>
 
-      <div data-coordinates-readout></div>
+      <section class="coordinates" x-data="coordinatesStatus" x-cloak
+        x-bind:data-phase="view.phase"
+        x-bind:aria-busy="view.busy ? 'true' : 'false'"
+        aria-label="Enhetens position">
+        <p class="coordinates-status" aria-live="polite">
+          <span class="coordinates-spinner" x-bind:hidden="!view.busy"></span>
+          <span class="coordinates-status-text" x-text="view.statusText">Ingen hämtning pågår.</span>
+        </p>
+        <dl class="coordinates-readout">
+          <div>
+            <dt>Position (long, lat)</dt>
+            <dd class="coordinates-position" x-text="view.positionText" x-bind:data-empty="view.positionEmpty">Ingen position ännu</dd>
+          </div>
+          <div>
+            <dt>Senast uppdaterad</dt>
+            <dd class="coordinates-updated" x-text="view.updatedText" x-bind:data-empty="view.updatedEmpty">Inte uppdaterad</dd>
+          </div>
+        </dl>
+      </section>
 
       <main class="site-main">
         <div class="sheet">
           <h1>Annan sida</h1>
           <p>
             Det här är en vanlig sidladdning, inte en vy i samma dokument. Inga reglage finns
-            här. <code>js/app.js</code> har ändå startat motorn i bakgrunden, samma anrop som
-            en layout gör på varje sida.
+            här. <code>js/app.js</code> har ändå startat Alpine och <code>$store.geo</code> i
+            bakgrunden, samma anrop som en layout gör på varje sida.
           </p>
           <p>
             Senaste position ligger i localStorage och syns direkt. Är pollning på tar den

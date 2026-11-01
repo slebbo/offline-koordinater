@@ -1,3 +1,5 @@
+[x-cloak] { display: none !important; }
+
 .coordinates {
   --coordinates-ink: var(--ink, #1c1915);
   --coordinates-sheet: var(--sheet, #f7f4ec);

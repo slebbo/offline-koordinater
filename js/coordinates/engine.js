@@ -1,6 +1,7 @@
 // Background position tracker. The Geolocation API exists only on documents,
-// so the host layout starts this on every page. Controls are optional and
-// live in panel.js. Nothing here talks to a service worker or the network.
+// so the host layout starts this on every page. State lives in Alpine.store
+// ("geo") and Alpine Persist. Controls are Alpine components in components.js.
+// Nothing here talks to a service worker or the network.
 //
 // Mobile Safari shows the location prompt only when getCurrentPosition runs
 // in the same turn as a tap. A permission query or Web Lock await before
@@ -8,6 +9,8 @@
 // click therefore starts the read immediately. The load-time option has no
 // gesture to preserve, so it may ask the Permissions API first and skip
 // browsers that would swallow the call.
+
+import { registerCoordinatesComponents } from "./components.js";
 
 const ACQUIRE_STALE_MS = 120000;
 const PERMISSION_QUERY_MS = 2500;
@@ -32,18 +35,7 @@ const WATCH_OPTIONS = { enableHighAccuracy: true, maximumAge: 5000, timeout: 600
 const ERROR_CODES = { 1: "denied", 2: "unavailable", 3: "timeout" };
 const FATAL_ERRORS = new Set(["denied", "unsupported", "insecure", "policy", "blocked"]);
 
-const IDLE_STATE = {
-  longitude: null,
-  latitude: null,
-  updatedAt: null,
-  polling: false,
-  acquiring: false,
-  acquiringSince: null,
-  acquireMode: null,
-  error: null,
-};
-
-const GLOBAL_SLOT = "__offlineKoordinater";
+const REGISTERED = "__offlineKoordinater";
 
 /**
  * @typedef {"denied" | "blocked" | "unavailable" | "timeout" | "unsupported" | "insecure" | "policy"} CoordinatesError
@@ -70,60 +62,34 @@ const GLOBAL_SLOT = "__offlineKoordinater";
  *   controls remain the way to ask.
  * @property {string} [storagePrefix="ok"]
  * @property {string} [lockName="offline-koordinater-geo"]
- * @typedef {Object} CoordinatesController
- * @property {() => CoordinatesState} getState
- * @property {(listener: (state: CoordinatesState) => void) => () => void} subscribe
- * @property {(mode: "oneshot" | "poll") => void} request
- * @property {() => void} refreshNow
- * @property {() => void} stopPolling
+ * @property {object} [Alpine]
+ *   Host Alpine instance. Defaults to `window.Alpine`.
  */
 
 /**
- * Start the background tracker once per document. Later calls return the
- * same controller. A later `requestAccessOnLoad: true` still asks, once,
- * if the first call did not. Without `window` (SSR) this returns an idle
- * controller and does not touch storage.
+ * Register the geo store and the controls on the host's Alpine, once.
+ * Call it after `Alpine.plugin(persist)` and before `Alpine.start()`.
+ * A later `requestAccessOnLoad: true` still asks, once, if the first call
+ * did not. Without `window` (SSR) this does nothing.
+ * The host's other components read `$store.geo`.
  * @param {StartCoordinatesOptions} [options]
- * @returns {CoordinatesController}
  */
 export function startCoordinates(options = {}) {
-  if (typeof window === "undefined") return serverController();
-  const existing = window[GLOBAL_SLOT];
-  if (existing?.api) {
+  if (typeof window === "undefined") return;
+  const Alpine = options.Alpine ?? window.Alpine;
+  if (!Alpine?.store) {
+    throw new Error("Set window.Alpine, or pass options.Alpine, before startCoordinates().");
+  }
+  if (typeof Alpine.$persist !== "function") {
+    throw new Error("Register @alpinejs/persist before startCoordinates().");
+  }
+  const existing = window[REGISTERED];
+  if (existing) {
     if (options.requestAccessOnLoad) existing.askOnLoad();
-    return existing.api;
+    return;
   }
-  const created = createEngine(normalizeOptions(options));
-  window[GLOBAL_SLOT] = created;
-  return created.api;
-}
-
-/**
- * Controller from the layout's startCoordinates() call.
- * @returns {CoordinatesController}
- */
-export function getCoordinates() {
-  if (typeof window === "undefined") return serverController();
-  const existing = window[GLOBAL_SLOT];
-  if (!existing?.api) {
-    throw new Error("Call startCoordinates() before getCoordinates().");
-  }
-  return existing.api;
-}
-
-function serverController() {
-  return {
-    getState() {
-      return { ...IDLE_STATE };
-    },
-    subscribe(listener) {
-      if (typeof listener === "function") listener({ ...IDLE_STATE });
-      return () => {};
-    },
-    request() {},
-    refreshNow() {},
-    stopPolling() {},
-  };
+  const askOnLoad = createEngine(Alpine, normalizeOptions(options));
+  window[REGISTERED] = { askOnLoad };
 }
 
 function normalizeOptions(options) {
@@ -136,13 +102,11 @@ function normalizeOptions(options) {
   };
 }
 
-function createEngine(options) {
+function createEngine(Alpine, options) {
   const prefix = options.storagePrefix;
   const lockName = options.lockName;
-  const geo = { ...IDLE_STATE, immediate: false };
-  /** @type {Set<(state: CoordinatesState) => void>} */
-  const listeners = new Set();
-  let notifyQueued = false;
+  /** @type {object | null} */
+  let geo = null;
 
   let desired = false;
   let running = false;
@@ -170,57 +134,17 @@ function createEngine(options) {
   let accessStarted = false;
   let accessWaitInstalled = false;
 
-  function publicState() {
-    return {
-      longitude: geo.longitude,
-      latitude: geo.latitude,
-      updatedAt: geo.updatedAt,
-      polling: geo.polling,
-      acquiring: geo.acquiring,
-      acquiringSince: geo.acquiringSince,
-      acquireMode: geo.acquireMode,
-      error: geo.error,
-    };
-  }
-
-  function scheduleNotify() {
-    if (notifyQueued) return;
-    notifyQueued = true;
-    queueMicrotask(() => {
-      notifyQueued = false;
-      const snapshot = publicState();
-      for (const listener of [...listeners]) {
-        try {
-          listener(snapshot);
-        } catch (error) {
-          console.error(error);
-        }
-      }
-    });
-  }
-
-  function adopt(patch, { persist = true, notify = true } = {}) {
-    let changed = false;
+  // Alpine Persist writes the wrapped fields. Assigning the store proxy is
+  // enough for both the open page and localStorage.
+  function adopt(patch) {
     let trackingChanged = false;
     for (const field of Object.keys(patch)) {
       const value = patch[field];
       if (Object.is(geo[field], value)) continue;
       geo[field] = value;
-      changed = true;
-      if (persist && PERSISTED_FIELDS.includes(field)) storageSet(`${prefix}.${field}`, value);
       if (TRACKING_FIELDS.has(field)) trackingChanged = true;
     }
-    if (changed && notify) scheduleNotify();
     return trackingChanged;
-  }
-
-  function subscribe(listener) {
-    if (typeof listener !== "function") {
-      throw new Error("subscribe() expects a function.");
-    }
-    listeners.add(listener);
-    listener(publicState());
-    return () => listeners.delete(listener);
   }
 
   function storageGet(key) {
@@ -231,30 +155,7 @@ function createEngine(options) {
     }
   }
 
-  function storageSet(key, value) {
-    try {
-      localStorage.setItem(key, JSON.stringify(value));
-    } catch {
-      // Private mode and quota failures still leave the in-memory fix.
-    }
-  }
-
-  function hydrate() {
-    const patch = {};
-    for (const field of PERSISTED_FIELDS) {
-      const raw = storageGet(`${prefix}.${field}`);
-      if (raw == null) continue;
-      try {
-        patch[field] = JSON.parse(raw);
-      } catch {
-        // Ignore a broken value and keep the idle field.
-      }
-    }
-    adopt(patch, { persist: false, notify: false });
-  }
-
   function installRuntime() {
-    hydrate();
     expireStaleAcquire();
     window.addEventListener("storage", onStorage);
     window.addEventListener("visibilitychange", syncTracking);
@@ -718,7 +619,7 @@ function createEngine(options) {
     } catch {
       return;
     }
-    const trackingChanged = adopt({ [field]: value }, { persist: false });
+    const trackingChanged = adopt({ [field]: value });
     if (trackingChanged) syncTracking();
   }
 
@@ -733,7 +634,7 @@ function createEngine(options) {
         continue;
       }
     }
-    const trackingChanged = adopt(patch, { persist: false });
+    const trackingChanged = adopt(patch);
     if (trackingChanged) syncTracking();
   }
 
@@ -783,9 +684,30 @@ function createEngine(options) {
     beginRequest("oneshot");
   }
 
-  const api = {
-    getState: publicState,
-    subscribe,
+  function persisted(initial, name) {
+    return Alpine.$persist(initial).as(`${prefix}.${name}`);
+  }
+
+  Alpine.store("coordinatesUi", {
+    mode: null,
+    open(mode) {
+      this.mode = mode;
+    },
+    close() {
+      this.mode = null;
+    },
+  });
+
+  Alpine.store("geo", {
+    longitude: persisted(null, "longitude"),
+    latitude: persisted(null, "latitude"),
+    updatedAt: persisted(null, "updatedAt"),
+    polling: persisted(false, "polling"),
+    acquiring: persisted(false, "acquiring"),
+    acquiringSince: persisted(null, "acquiringSince"),
+    acquireMode: persisted(null, "acquireMode"),
+    error: persisted(null, "error"),
+    immediate: false,
     request(mode) {
       if (mode !== "oneshot" && mode !== "poll") return;
       beginRequest(mode);
@@ -796,9 +718,14 @@ function createEngine(options) {
     stopPolling() {
       haltPolling();
     },
-  };
-
-  installRuntime();
-  if (options.requestAccessOnLoad) requestAccessOnLoad();
-  return { api, askOnLoad: requestAccessOnLoad };
+    init() {
+      // `this` is the store. init can run inside Alpine.store(), before it returns.
+      geo = this;
+      installRuntime();
+      if (options.requestAccessOnLoad) requestAccessOnLoad();
+    },
+  });
+  geo = Alpine.store("geo");
+  registerCoordinatesComponents(Alpine);
+  return requestAccessOnLoad;
 }

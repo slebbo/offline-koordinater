@@ -1,14 +1,15 @@
-// POC layout. Every page loads this file. The coordinates engine starts
-// here, in the background. Markup decides whether this page shows the
-// controls, a readout, or neither. The service worker belongs to the
-// offline demo, not to the coordinates module.
+// POC layout. Every page loads this file. Alpine and the coordinates
+// store start here, in the background. Markup decides whether this page
+// shows the controls, a readout, or neither. The service worker belongs
+// to the offline demo, not to the coordinates module.
 
-import {
-  mountCoordinatesPanel,
-  mountCoordinatesReadout,
-  startCoordinates,
-} from "./coordinates/index.js";
+import Alpine from "../vendor/alpinejs/module.esm.js";
+import persist from "../vendor/@alpinejs/persist/module.esm.js";
+import { startCoordinates } from "./coordinates/index.js";
 import { startOfflineStatus } from "./offline-status.js";
+
+window.Alpine = Alpine;
+Alpine.plugin(persist);
 
 startCoordinates({
   // Ask on load when the context allows it. Left off unless the page opts
@@ -19,8 +20,4 @@ startCoordinates({
 
 startOfflineStatus(document.querySelector("[data-offline-status]"));
 
-const panel = document.querySelector("[data-coordinates-panel]");
-if (panel) mountCoordinatesPanel(panel);
-
-const readout = document.querySelector("[data-coordinates-readout]");
-if (readout) mountCoordinatesReadout(readout);
+Alpine.start();

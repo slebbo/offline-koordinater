@@ -25,15 +25,50 @@
         <span data-offline-cache>Offline-cache: installeras…</span>
       </p>
 
-      <div data-coordinates-panel></div>
+      <section class="coordinates" x-data="coordinatesStatus" x-cloak
+        x-bind:data-phase="view.phase"
+        x-bind:aria-busy="view.busy ? 'true' : 'false'"
+        aria-label="Enhetens position">
+        <p class="coordinates-status" aria-live="polite">
+          <span class="coordinates-spinner" x-bind:hidden="!view.busy"></span>
+          <span class="coordinates-status-text" x-text="view.statusText">Ingen hämtning pågår.</span>
+        </p>
+        <dl class="coordinates-readout">
+          <div>
+            <dt>Position (long, lat)</dt>
+            <dd class="coordinates-position" x-text="view.positionText" x-bind:data-empty="view.positionEmpty">Ingen position ännu</dd>
+          </div>
+          <div>
+            <dt>Senast uppdaterad</dt>
+            <dd class="coordinates-updated" x-text="view.updatedText" x-bind:data-empty="view.updatedEmpty">Inte uppdaterad</dd>
+          </div>
+        </dl>
+        <div class="coordinates-controls" x-data="coordinatesControls">
+          <button class="coordinates-action coordinates-action-fetch" type="button" x-on:click="ask()">Hämta position</button>
+          <label class="coordinates-switch">
+            <input class="coordinates-switch-input" type="checkbox" role="switch" aria-describedby="coordinates-hint" x-ref="input" x-on:change="onChange($event)">
+            <span class="coordinates-track" aria-hidden="true"><span class="coordinates-thumb"></span></span>
+            <span>Polla position</span>
+          </label>
+          <p class="coordinates-hint" id="coordinates-hint">På läser positionen löpande. Av stoppar pollningen.</p>
+        </div>
+        <dialog class="coordinates-dialog" x-data="coordinatesConfirm" aria-labelledby="coordinates-title">
+          <h2 class="coordinates-dialog-title" id="coordinates-title">Bekräfta position</h2>
+          <p class="coordinates-dialog-text" x-text="text"></p>
+          <div class="coordinates-dialog-actions">
+            <button class="coordinates-dialog-cancel" type="button" x-on:click="cancel()">Avbryt</button>
+            <button class="coordinates-action coordinates-dialog-allow" type="button" x-on:click="allow()">Tillåt</button>
+          </div>
+        </dialog>
+      </section>
 
       <main class="site-main">
         <div class="sheet">
           <h1>Min sida</h1>
           <p>
-            Reglagen för position ligger bara här. <code>js/app.js</code> startar samma motor
-            på varje sida, så Annan sida kan visa läget utan knappar. Är pollning på tar den
-            synliga sidan över GPS-läsningen.
+            Reglagen för position ligger bara här. <code>js/app.js</code> startar Alpine och
+            <code>$store.geo</code> på varje sida, så Annan sida kan visa läget utan knappar.
+            Är pollning på tar den synliga sidan över GPS-läsningen.
           </p>
           <p>
             Knappen ber om bekräftelse och läser positionen en gång. Reglaget läser löpande.

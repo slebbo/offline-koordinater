@@ -1,25 +1,32 @@
 # offline-koordinater
 
-Positionen är en modul som kan köras i bakgrunden på varje sida. Reglagen monteras bara där de ska synas, till exempel på en flik under Min sida. POC:n i den här repan är en statisk sajt som använder modulen så, och dessutom en service worker så att sidorna finns kvar utan publikt internet. Modulen själv registrerar ingen worker och anropar inget nät.
+Positionen är en modul som kan köras i bakgrunden på varje sida. Den registrerar `Alpine.store("geo")` med Alpine Persist, så andra Alpine-komponenter läser samma läge via `$store.geo`. Reglagen är Alpine-komponenter och ligger bara där de ska synas, till exempel på en flik under Min sida. POC:n i den här repan är en statisk sajt som använder modulen så, och dessutom en service worker så att sidorna finns kvar utan publikt internet. Modulen själv registrerar ingen worker och anropar inget nät. Den tar inte med en egen Alpine. Sidan som använder den har redan Alpine och `@alpinejs/persist`.
 
 ## Använda modulen i Vite
 
-Kopiera in `js/coordinates/`. Vite buntar ES-modulerna som de är. Ingen byggkonfiguration behövs i den här repan, och inget av `sw.js` eller `js/offline-status.js` ska med om sajten redan har nät.
+Kopiera in `js/coordinates/`. Vite buntar ES-modulerna som de är. Använd Alpine och persist från projektet, inte från `vendor/` i den här repan. `vendor/` finns bara så att POC:n kan köras utan byggsteg. Ingenting av `sw.js` eller `js/offline-status.js` ska med om sajten redan har nät.
 
 ### Layouten, på varje sida
 
-Anropa `startCoordinates()` en gång per sidladdning, i den gemensamma layouten. Det startar lagring, flik-lås och, om pollning redan är på, GPS-läsningen. Sidan behöver inga knappar för det.
+Anropa `startCoordinates()` en gång per sidladdning, i den gemensamma layouten, efter `Alpine.plugin(persist)` och före `Alpine.start()`. Det registrerar storen, lagringen och flik-låset. Är pollning redan på fortsätter GPS-läsningen. Sidan behöver inga knappar för det.
 
 ```js
+import Alpine from "alpinejs";
+import persist from "@alpinejs/persist";
 import { startCoordinates } from "./coordinates/index.js";
 import "./coordinates/panel.css";
+
+window.Alpine = Alpine;
+Alpine.plugin(persist);
 
 startCoordinates({
   requestAccessOnLoad: true,
 });
+
+Alpine.start();
 ```
 
-CSS-filen behövs bara om någon sida ritar panelen eller avläsningen. Importen av JavaScript är ofarlig under SSR. Anropa `startCoordinates` i webbläsaren. Anropas den ändå utan `window` gör den ingenting och rör inte `localStorage`.
+`window.Alpine = Alpine` gör samma instans tillgänglig för sidans övriga komponenter. `startCoordinates` använder `window.Alpine` om du inte skickar in instansen som `Alpine`. CSS-filen behövs bara om någon sida ritar panelen eller avläsningen. Importen av JavaScript är ofarlig under SSR. Anropa `startCoordinates` i webbläsaren. Anropas den ändå utan `window` gör den ingenting och rör inte `localStorage`.
 
 `requestAccessOnLoad` frågar efter tillgång vid den här sidladdningen när sammanhanget tillåter det:
 
@@ -39,77 +46,60 @@ En väntande fråga ställs igen vid nästa sidladdning, tills webbläsaren har 
 
 ### Reglage på en sida
 
-Montera panelen bara i vyn där reglagen ska ligga. Motorn fortsätter när vyn tas bort. Funktionen som `mountCoordinatesPanel` returnerar tar bort panelen, till exempel när en flik stängs i en SPA.
+Lägg markupen bara i vyn där reglagen ska ligga, till exempel fliken Min sida. Storen fortsätter på de andra sidorna. Komponenten `coordinatesStatus` visar läget, `coordinatesControls` har knappen och reglaget, och `coordinatesConfirm` är bekräftelsedialogen.
 
-```js
-import { mountCoordinatesPanel } from "./coordinates/index.js";
-
-const unmount = mountCoordinatesPanel(document.querySelector("#position"));
+```html
+<section class="coordinates" x-data="coordinatesStatus" x-cloak
+  x-bind:data-phase="view.phase" aria-label="Enhetens position">
+  <p class="coordinates-status" aria-live="polite">
+    <span class="coordinates-spinner" x-bind:hidden="!view.busy"></span>
+    <span x-text="view.statusText"></span>
+  </p>
+  <dl class="coordinates-readout">
+    <div>
+      <dt>Position (long, lat)</dt>
+      <dd x-text="view.positionText"></dd>
+    </div>
+    <div>
+      <dt>Senast uppdaterad</dt>
+      <dd x-text="view.updatedText"></dd>
+    </div>
+  </dl>
+  <div class="coordinates-controls" x-data="coordinatesControls">
+    <button type="button" x-on:click="ask()">Hämta position</button>
+    <label class="coordinates-switch">
+      <input type="checkbox" role="switch" x-ref="input" x-on:change="onChange($event)">
+      <span>Polla position</span>
+    </label>
+  </div>
+  <dialog class="coordinates-dialog" x-data="coordinatesConfirm">
+    <p x-text="text"></p>
+    <button type="button" x-on:click="cancel()">Avbryt</button>
+    <button type="button" x-on:click="allow()">Tillåt</button>
+  </dialog>
+</section>
 ```
 
-Panelen ritar status, senaste träff, knappen **Hämta position**, reglaget **Polla position** och bekräftelsedialogen. Elementet måste finnas i dokumentet. Dialogen måste nå `getCurrentPosition` i samma tur som klicket, annars visar Safari ingen fråga. Panelen gör det redan.
-
-Vue:
-
-```js
-import { mountCoordinatesPanel } from "./coordinates/index.js";
-
-export default {
-  mounted() {
-    this.unmount = mountCoordinatesPanel(this.$refs.position);
-  },
-  beforeUnmount() {
-    this.unmount?.();
-  },
-  template: `<div ref="position"></div>`,
-};
-```
-
-React:
-
-```jsx
-import { useEffect, useRef } from "react";
-import { mountCoordinatesPanel } from "./coordinates/index.js";
-
-export function PositionTab() {
-  const ref = useRef(null);
-  useEffect(() => mountCoordinatesPanel(ref.current), []);
-  return <div ref={ref} />;
-}
-```
+Tillåt anropar `$store.geo.request()` i samma tur som klicket. En `await` före det anropet gör att Safari inte visar platsfrågan.
 
 ### Bara visa läget
 
-```js
-import { mountCoordinatesReadout } from "./coordinates/index.js";
+Utan `coordinatesControls` och `coordinatesConfirm` blir samma `coordinatesStatus` en avläsning. POC:ns sida Annan sida är det här. Vilken annan komponent som helst kan också läsa storen:
 
-mountCoordinatesReadout(document.querySelector("#position"));
+```html
+<p x-text="$store.geo.latitude"></p>
+<button type="button" x-on:click="$store.geo.refreshNow()">Hämta nu</button>
 ```
 
-Avläsningen har status och senaste träff, inga reglage. POC:ns sida Annan sida är det här.
+`request`, `refreshNow` och `stopPolling` sitter på `$store.geo`. `request("oneshot")` och `request("poll")` måste anropas synkront i klickhanteraren.
 
-### Eget gränssnitt
+`$store.geo.error` är `denied`, `blocked`, `unavailable`, `timeout`, `unsupported`, `insecure`, `policy` eller `null`.
 
-```js
-import { getCoordinates } from "./coordinates/index.js";
+### Lagring
 
-const coordinates = getCoordinates();
-const stop = coordinates.subscribe((state) => {
-  // state.longitude, state.latitude, state.updatedAt
-  // state.polling, state.acquiring, state.error
-});
+Alpine Persist skriver fälten. Nycklarna är samma som tidigare, så en sparad träff finns kvar.
 
-coordinates.request("oneshot");
-coordinates.request("poll");
-coordinates.refreshNow();
-coordinates.stopPolling();
-```
-
-`getCoordinates()` kräver att layouten redan har kallat `startCoordinates()`. `request` och `refreshNow` måste anropas synkront i klickhanteraren. En `await` före anropet gör att Safari inte visar platsfrågan.
-
-`state.error` är `denied`, `blocked`, `unavailable`, `timeout`, `unsupported`, `insecure`, `policy` eller `null`.
-
-### Lagring och flikar
+### Flikar
 
 | Nyckel | Innehåll |
 | --- | --- |
@@ -142,7 +132,7 @@ Service workers fungerar inte från `file://`. Starta en statisk server i repots
 python3 -m http.server 8080
 ```
 
-Öppna `http://localhost:8080`. `js/app.js` är layouten: båda sidorna startar motorn, Min sida monterar panelen, Annan sida monterar avläsningen.
+Öppna `http://localhost:8080`. `js/app.js` är layouten: båda sidorna startar Alpine och `$store.geo`. Min sida har reglagen. Annan sida har bara avläsningen.
 
 Första besöket måste nå värden så att cachen fylls. Därefter fungerar sidorna i en VPN-tunnel utan publikt internet, och med radiot avstängt.
 
@@ -185,7 +175,7 @@ Permissions API frågas parallellt och får högst 2,5 sekunder på sig. Hänger
 
 `watchPosition` startar inte i samma tryck. Det väntar tills engångsanropet fått svar, så ett tidigt fel från klockan inte kan avbryta frågan. En sida som tar över en redan igång pollning börjar bevaka direkt. Nekad, blockerad, saknad policy, osäker eller otillgänglig position är ett synligt fel. Ett fel från själva GPS-anropet som är nekat, blockerat, policy, osäkert eller en enhet utan API slår också av pollning.
 
-Träffen normaliseras (ändliga tal, lat inom ±90, long inom ±180) och skrivs till `localStorage` som JSON.
+Träffen normaliseras (ändliga tal, lat inom ±90, long inom ±180) och skrivs av Alpine Persist till `localStorage` som JSON.
 
 En hängande engångshämtning som fortfarande är markerad efter 120 sekunder blir `timeout` vid nästa sidladdning, om inget annat fel redan syns. Pollning får fortsätta.
 
@@ -203,12 +193,13 @@ Andra worker-förmågor hjälper inte positionen. Background Sync kan inte läsa
 
 | Fil | Roll |
 | --- | --- |
-| `js/coordinates/index.js` | Det en Vite-app importerar |
-| `js/coordinates/engine.js` | Bakgrundsmotor: GPS, tillstånd, `localStorage`, Web Lock |
-| `js/coordinates/panel.js` | Panel och avläsning |
+| `js/coordinates/index.js` | Det en Vite-app importerar. Exporterar `startCoordinates` |
+| `js/coordinates/engine.js` | `Alpine.store("geo")`, GPS, tillstånd, Alpine Persist, Web Lock |
+| `js/coordinates/components.js` | `coordinatesStatus`, `coordinatesControls`, `coordinatesConfirm` |
 | `js/coordinates/status.js` | Texterna i panelen |
 | `js/coordinates/panel.css` | Utseende för panelen. Variabler faller tillbaka om värden inte sätter `--ink`, `--sheet` och de andra |
-| `js/app.js` | POC:ns layout. Startar motorn på varje sida och monterar det markup ber om |
+| `js/app.js` | POC:ns layout. Startar Alpine, persist och storen på varje sida |
+| `vendor/` | Alpine och persist för POC:n. En Vite-app använder sina egna paket |
 | `js/offline-status.js` | POC:ns länk, värd och cache. Inte en del av modulen |
 | `sw.js` | POC:ns offline-cache |
 | `index.html` | Min sida, med reglage |
@@ -217,17 +208,19 @@ Andra worker-förmågor hjälper inte positionen. Background Sync kan inte läsa
 ## Flöde
 
 ```text
-layouten anropar startCoordinates() på varje sida
+layouten anropar startCoordinates() före Alpine.start()
+        │
+        ├─ Alpine.store("geo") med Alpine Persist
         │
         ├─ requestAccessOnLoad, om sammanhanget tillåter det
         │
         └─ pollning som redan är på tas över av den synliga sidan
                     │
                     ▼
-Min sida monterar panelen
+Min sida har x-data för reglagen
         │
         ▼
-bekräftelse i panelen
+bekräftelse i dialogen, $store.geo.request() i samma tryck
         │
         ▼
 synliga spärrar: API, https, permissions policy
