@@ -4,83 +4,45 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="google" content="notranslate">
-    <title>Om · Offline-koordinater</title>
+    <title>Annan sida · Offline-koordinater</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%231c1915'/%3E%3Ccircle cx='8' cy='8' r='2.5' fill='%23f7f4ec'/%3E%3C/svg%3E">
     <link rel="stylesheet" href="./css/app.css">
+    <link rel="stylesheet" href="./js/coordinates/panel.css">
   </head>
   <body>
     <div class="site">
       <header class="site-header">
         <p class="brand">Offline-koordinater</p>
         <nav class="site-nav" aria-label="Sidor">
-          <a href="./index.html">Start</a>
-          <a href="./about.html" aria-current="page">Om</a>
+          <a href="./index.html">Min sida</a>
+          <a href="./about.html" aria-current="page">Annan sida</a>
         </nav>
       </header>
 
-      <section
-        class="status-plate"
-        x-data="statusPlate"
-        x-cloak
-        x-bind:data-phase="phase"
-        x-bind:aria-busy="busy ? 'true' : 'false'"
-        aria-live="polite"
-      >
-        <p class="status-line">
-          <span class="spinner" x-show="busy"></span>
-          <span id="status-text" x-text="statusText">Ingen hämtning pågår.</span>
-        </p>
-        <dl class="readout">
-          <div>
-            <dt>Position (long, lat)</dt>
-            <dd id="position-value" x-text="positionText" x-bind:data-empty="positionEmpty">Ingen position ännu</dd>
-          </div>
-          <div>
-            <dt>Senast uppdaterad</dt>
-            <dd id="updated-value" x-text="updatedText" x-bind:data-empty="updatedEmpty">Inte uppdaterad</dd>
-          </div>
-        </dl>
-        <p class="runtime">
-          <span id="connectivity" x-text="linkText">Länk: uppe</span>
-          <span id="origin-state" x-text="originText">Värd: kontrolleras…</span>
-          <span id="cache-state" x-text="cacheText">Offline-cache: installeras…</span>
-        </p>
-      </section>
+      <p class="runtime" data-offline-status>
+        <span data-offline-link>Länk: uppe</span>
+        <span data-offline-origin>Värd: kontrolleras…</span>
+        <span data-offline-cache>Offline-cache: installeras…</span>
+      </p>
+
+      <div data-coordinates-readout></div>
 
       <main class="site-main">
         <div class="sheet">
-          <h1>Om</h1>
+          <h1>Annan sida</h1>
           <p>
-            Det här är en vanlig sidladdning, inte en vy i samma dokument. Senaste position,
-            pågående hämtning och om pollning är på ligger i localStorage, så de följer med hit.
+            Det här är en vanlig sidladdning, inte en vy i samma dokument. Inga reglage finns
+            här. <code>js/app.js</code> har ändå startat motorn i bakgrunden, samma anrop som
+            en layout gör på varje sida.
           </p>
           <p>
-            GPS kan bara läsas från en öppen sida. Service workern har inget geolocation-API,
-            därför cachelagrar den bara filerna. Wifi, mobildata eller en VPN-tunnel kan vara uppe
-            utan att det publika internet går att nå. Då svarar workern från cachen, och positionen
-            läses lokalt. Om pollning var igång tar den synliga sidan över läsningen.
+            Senaste position ligger i localStorage och syns direkt. Är pollning på tar den
+            här fliken över läsningen när den är synlig. GPS kan bara läsas från en öppen sida.
+            Ändra pollningen på Min sida.
           </p>
         </div>
       </main>
-
-      <footer class="site-footer" x-data="pollSwitch" x-cloak>
-        <label class="poll-switch">
-          <input id="poll-toggle" type="checkbox" role="switch" aria-describedby="poll-hint" x-ref="input" x-on:change="onChange($event)">
-          <span class="track" aria-hidden="true"><span class="thumb"></span></span>
-          <span>Polla position</span>
-        </label>
-        <p class="switch-hint" id="poll-hint">På läser positionen löpande. Av stoppar pollningen.</p>
-      </footer>
     </div>
-
-    <dialog class="confirm-dialog" id="confirm-dialog" x-data="confirmDialog" aria-labelledby="confirm-title">
-      <h2 id="confirm-title">Bekräfta position</h2>
-      <p id="confirm-text" x-text="text"></p>
-      <div class="dialog-actions">
-        <button type="button" id="confirm-cancel" x-on:click="cancel">Avbryt</button>
-        <button class="action" type="button" id="confirm-allow" x-on:click="allow">Tillåt</button>
-      </div>
-    </dialog>
     <script type="module" src="./js/app.js"></script>
   </body>
 </html>
