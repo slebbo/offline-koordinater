@@ -12,4 +12,4 @@ The POC must keep working with the network disabled after the service worker has
 - On install, cache that full list. Serve cached responses while offline. App code and libraries must not depend on a network fetch.
 - When you add, rename, or remove a file or dependency, update the precache list in the same change and bump the cache name.
 - Do not call remote APIs for core behavior. If a feature needs data, ship that data in the repo and cache it.
-- Verify offline by loading the site once so the worker installs, then disabling the network and reloading. The full UI must still work.
+- Verify offline programmatically: load the site once so the worker installs, disable the network, reload, and assert that the page still responds and the console has no errors.
