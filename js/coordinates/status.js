@@ -37,6 +37,7 @@ function statusKey(state) {
   if (state.error) return state.error;
   if (state.acquiring) return "acquiring";
   if (state.polling) return "polling";
+  if (state.readOnLoad) return "load";
   if (hasPosition(state)) return "ready";
   return "idle";
 }
@@ -44,12 +45,14 @@ function statusKey(state) {
 function phaseFor(key) {
   if (key === "acquiring") return "acquiring";
   if (key === "polling") return "polling";
+  if (key === "load") return "load";
   if (key === "idle" || key === "ready") return "idle";
   return "error";
 }
 
 function textFor(key, state) {
   if (key === "polling") return `Pollar position ${pollIntervalCadence(state.pollIntervalMs)}.`;
+  if (key === "load") return "Nästa sidladdning hämtar en ny position.";
   if (key === "denied") return `Tillstånd att hämta position saknas.${locationAdvice()}`;
   if (key === "blocked") {
     return `Webbläsaren frågade inte om position, eller så kom inget svar.${locationAdvice()}`;

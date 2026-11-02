@@ -26,6 +26,7 @@ const PERSISTED_FIELDS = [
   "updatedAt",
   "polling",
   "pollIntervalMs",
+  "readOnLoad",
   "acquiring",
   "acquiringSince",
   "acquireMode",
@@ -50,6 +51,7 @@ const IDLE_STATE = {
   updatedAt: null,
   polling: false,
   pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
+  readOnLoad: false,
   acquiring: false,
   acquiringSince: null,
   acquireMode: null,
@@ -67,6 +69,10 @@ const GLOBAL_SLOT = "__offlineKoordinater";
  * @property {number | null} updatedAt
  * @property {boolean} polling
  * @property {number} pollIntervalMs
+ * @property {boolean} readOnLoad
+ *   When true, each document load reads one fresh fix. A route change inside
+ *   the same document does not. The switch that turns this on has to call
+ *   `request("load")` in the tap, so Safari can show its prompt.
  * @property {boolean} acquiring
  * @property {number | null} acquiringSince
  * @property {AcquireMode} acquireMode
@@ -87,9 +93,10 @@ const GLOBAL_SLOT = "__offlineKoordinater";
  * @typedef {Object} CoordinatesController
  * @property {() => CoordinatesState} getState
  * @property {(listener: (state: CoordinatesState) => void) => () => void} subscribe
- * @property {(mode: "oneshot" | "poll") => void} request
+ * @property {(mode: "oneshot" | "poll" | "load") => void} request
  * @property {() => void} refreshNow
  * @property {() => void} stopPolling
+ * @property {() => void} stopReadOnLoad
  * @property {(ms: number) => void} setPollInterval
  *   Snap to the nearest allowed interval and, when polling is already on,
  *   use it for the next read. Does not ask for permission.
@@ -140,6 +147,7 @@ function serverController() {
     request() {},
     refreshNow() {},
     stopPolling() {},
+    stopReadOnLoad() {},
     setPollInterval() {},
   };
 }
@@ -206,6 +214,7 @@ function createEngine(options) {
       updatedAt: geo.updatedAt,
       polling: geo.polling,
       pollIntervalMs: geo.pollIntervalMs,
+      readOnLoad: geo.readOnLoad,
       acquiring: geo.acquiring,
       acquiringSince: geo.acquiringSince,
       acquireMode: geo.acquireMode,
@@ -292,8 +301,12 @@ function createEngine(options) {
   }
 
   function normalizeStoredPatch(patch) {
-    if (!Object.prototype.hasOwnProperty.call(patch, "pollIntervalMs")) return patch;
-    patch.pollIntervalMs = canonicalPollInterval(patch.pollIntervalMs);
+    if (Object.prototype.hasOwnProperty.call(patch, "pollIntervalMs")) {
+      patch.pollIntervalMs = canonicalPollInterval(patch.pollIntervalMs);
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "readOnLoad")) {
+      patch.readOnLoad = patch.readOnLoad === true;
+    }
     return patch;
   }
 
@@ -342,10 +355,15 @@ function createEngine(options) {
       leaderAbort?.abort();
     });
     window.addEventListener("pageshow", (event) => {
-      if (event.persisted) pullPersistedFields();
+      if (event.persisted) {
+        pullPersistedFields();
+        // Returning from the back-forward cache is another opening of the page.
+        if (geo.readOnLoad) readForLoad();
+      }
       syncTracking();
     });
     syncTracking();
+    if (geo.readOnLoad) readForLoad();
   }
 
   function expireStaleAcquire() {
@@ -499,6 +517,7 @@ function createEngine(options) {
       immediate: false,
     };
     if (fatal || mode === "poll") patch.polling = false;
+    if (fatal) patch.readOnLoad = false;
     if (fatal || mode === "poll" || !geo.polling) patch.acquireMode = null;
     adopt(patch);
     syncTracking();
@@ -507,8 +526,12 @@ function createEngine(options) {
   function beginRequest(mode) {
     // A click supersedes an in-flight load-time ask.
     accessGeneration += 1;
+    if (mode === "load") adopt({ readOnLoad: true });
     if (mode === "poll" && geo.polling && !geo.error) return;
-    if (mode !== "poll" && geo.acquiring && !geo.polling && !geo.error) return;
+    // The mode is already stored. A read that is already running on this
+    // document covers the tap; the next document load reads again.
+    if (mode === "load" && geo.acquiring && !geo.polling && !geo.error) return;
+    if (mode === "oneshot" && geo.acquiring && !geo.polling && !geo.error) return;
     const blocker = syncBlocker();
     if (blocker) {
       applyPreflight(blocker, mode);
@@ -524,6 +547,13 @@ function createEngine(options) {
       patch.polling = true;
       patch.acquireMode = "poll";
       patch.immediate = false;
+    } else if (mode === "load") {
+      patch.readOnLoad = true;
+      if (geo.polling) patch.immediate = true;
+      else {
+        patch.acquireMode = "oneshot";
+        patch.immediate = false;
+      }
     } else if (geo.polling) {
       patch.immediate = true;
     } else {
@@ -555,6 +585,33 @@ function createEngine(options) {
     kickFromGesture();
   }
 
+  // One fresh fix per document when the user asked for a read on each open.
+  // Permission was granted by the switch's tap. This call has no new tap, so
+  // it does not try to preserve a user gesture.
+  function readForLoad() {
+    if (!geo.readOnLoad || oneshotActive) return;
+    const blocker = syncBlocker();
+    if (blocker) {
+      applyPreflight(blocker, "oneshot");
+      return;
+    }
+    accessGeneration += 1;
+    stopHardware();
+    const patch = {
+      error: null,
+      acquiring: true,
+      acquiringSince: Date.now(),
+    };
+    if (geo.polling) patch.immediate = true;
+    else {
+      patch.acquireMode = "oneshot";
+      patch.immediate = false;
+    }
+    adopt(patch);
+    startAttempt();
+    kickFromGesture();
+  }
+
   function haltPolling() {
     const patch = {
       polling: false,
@@ -564,6 +621,18 @@ function createEngine(options) {
       patch.acquiring = false;
       patch.acquiringSince = null;
       patch.acquireMode = null;
+    }
+    adopt(patch);
+    syncTracking();
+  }
+
+  function haltLoadRead() {
+    const patch = { readOnLoad: false };
+    if (!geo.polling && geo.acquireMode === "oneshot") {
+      patch.acquiring = false;
+      patch.acquiringSince = null;
+      patch.acquireMode = null;
+      patch.immediate = false;
     }
     adopt(patch);
     syncTracking();
@@ -831,6 +900,7 @@ function createEngine(options) {
     };
     if (fatal) {
       patch.polling = false;
+      patch.readOnLoad = false;
       patch.acquireMode = null;
     } else if (geo.acquireMode === "oneshot") {
       patch.acquireMode = null;
@@ -927,7 +997,7 @@ function createEngine(options) {
     getState: publicState,
     subscribe,
     request(mode) {
-      if (mode !== "oneshot" && mode !== "poll") return;
+      if (mode !== "oneshot" && mode !== "poll" && mode !== "load") return;
       beginRequest(mode);
     },
     refreshNow() {
@@ -935,6 +1005,9 @@ function createEngine(options) {
     },
     stopPolling() {
       haltPolling();
+    },
+    stopReadOnLoad() {
+      haltLoadRead();
     },
     setPollInterval(ms) {
       const next = canonicalPollInterval(ms);

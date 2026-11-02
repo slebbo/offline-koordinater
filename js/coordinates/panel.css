@@ -21,7 +21,8 @@
 .coordinates *::after { box-sizing: border-box; }
 
 .coordinates[data-phase="acquiring"] { border-color: var(--coordinates-signal); }
-.coordinates[data-phase="polling"] { border-color: var(--coordinates-live); }
+.coordinates[data-phase="polling"],
+.coordinates[data-phase="load"] { border-color: var(--coordinates-live); }
 .coordinates[data-phase="error"] .coordinates-status { color: var(--coordinates-signal); }
 
 .coordinates-status {
