@@ -3,13 +3,15 @@
 // position should be visible. Both subscribe; neither starts a second tracker.
 
 import { startCoordinates } from "./engine.js";
-import { describeCoordinates } from "./status.js";
+import { canonicalPollInterval, POLL_INTERVALS_MS } from "./interval.js";
+import { describeCoordinates, pollIntervalCadence, pollIntervalOptionLabel } from "./status.js";
 
-const DIALOG_TEXT = {
-  oneshot:
-    "Får enheten hämta position en gång? Träffen sparas i webbläsaren. Du kan byta sida medan hämtningen pågår.",
-  poll: "Får enheten hämta position löpande? Reglaget stänger av pollningen, även om du har bytt sida.",
-};
+const ONESHOT_DIALOG =
+  "Får enheten hämta position en gång? Träffen sparas i webbläsaren. Du kan byta sida medan hämtningen pågår.";
+
+function pollDialogText(ms) {
+  return `Får enheten hämta position ${pollIntervalCadence(ms)}? Reglaget stänger av pollningen, även om du har bytt sida.`;
+}
 
 const mounts = new WeakMap();
 let mountSequence = 0;
@@ -50,7 +52,9 @@ function mount(element, { controls }) {
   element.classList.add("coordinates");
   if (addedRole) element.setAttribute("role", "region");
   if (addedLabel) element.setAttribute("aria-label", "Enhetens position");
-  element.innerHTML = controls ? panelMarkup(id) : readoutMarkup();
+  element.innerHTML = controls
+    ? panelMarkup(id, coordinates.getState().pollIntervalMs)
+    : readoutMarkup();
 
   const status = element.querySelector(".coordinates-status");
   const spinner = element.querySelector(".coordinates-spinner");
@@ -58,6 +62,7 @@ function mount(element, { controls }) {
   const position = element.querySelector(".coordinates-position");
   const updated = element.querySelector(".coordinates-updated");
   const input = element.querySelector(".coordinates-switch-input");
+  const intervalInput = element.querySelector(".coordinates-interval-input");
   const dialog = element.querySelector(".coordinates-dialog");
   const dialogText = element.querySelector(".coordinates-dialog-text");
   let pendingMode = null;
@@ -73,11 +78,19 @@ function mount(element, { controls }) {
     updated.textContent = view.updatedText;
     updated.dataset.empty = view.updatedEmpty;
     if (input) input.checked = Boolean(state.polling);
+    if (intervalInput && document.activeElement !== intervalInput) {
+      const next = String(canonicalPollInterval(state.pollIntervalMs));
+      if (intervalInput.value !== next) intervalInput.value = next;
+    }
   }
 
   function openDialog(mode) {
     pendingMode = mode;
-    if (dialogText) dialogText.textContent = DIALOG_TEXT[mode] ?? "";
+    if (dialogText) {
+      dialogText.textContent = mode === "poll"
+        ? pollDialogText(coordinates.getState().pollIntervalMs)
+        : ONESHOT_DIALOG;
+    }
     if (dialog && !dialog.open) dialog.showModal();
   }
 
@@ -98,6 +111,10 @@ function mount(element, { controls }) {
       return;
     }
     coordinates.stopPolling();
+  });
+
+  intervalInput?.addEventListener("change", () => {
+    coordinates.setPollInterval(Number(intervalInput.value));
   });
 
   element.querySelector(".coordinates-dialog-allow")?.addEventListener("click", () => {
@@ -155,9 +172,14 @@ function readoutMarkup() {
   `;
 }
 
-function panelMarkup(id) {
+function panelMarkup(id, intervalMs) {
   const hintId = `coordinates-hint-${id}`;
   const titleId = `coordinates-title-${id}`;
+  const selected = canonicalPollInterval(intervalMs);
+  const options = POLL_INTERVALS_MS.map((ms) => {
+    const selectedAttr = ms === selected ? " selected" : "";
+    return `<option value="${ms}"${selectedAttr}>${pollIntervalOptionLabel(ms)}</option>`;
+  }).join("");
   return `
     ${readoutMarkup()}
     <div class="coordinates-controls">
@@ -167,7 +189,13 @@ function panelMarkup(id) {
         <span class="coordinates-track" aria-hidden="true"><span class="coordinates-thumb"></span></span>
         <span>Polla position</span>
       </label>
-      <p class="coordinates-hint" id="${hintId}">På läser positionen löpande. Av stoppar pollningen.</p>
+      <label class="coordinates-interval">
+        <span>Upplösning</span>
+        <select class="coordinates-interval-input" aria-describedby="${hintId}">
+          ${options}
+        </select>
+      </label>
+      <p class="coordinates-hint" id="${hintId}">På läser positionen med vald upplösning. 1 sekund följer enhetens egen takt. Grövre val läser en ny träff med det intervallet. Av stoppar pollningen.</p>
     </div>
     <dialog class="coordinates-dialog" aria-labelledby="${titleId}">
       <h2 class="coordinates-dialog-title" id="${titleId}">Bekräfta position</h2>

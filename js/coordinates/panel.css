@@ -145,8 +145,30 @@
   transform: translateX(1.45rem);
 }
 
+.coordinates-interval {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-weight: 650;
+}
+
+.coordinates-interval-input {
+  margin: 0;
+  max-width: 100%;
+  font: inherit;
+  font-weight: 650;
+  color: var(--coordinates-ink);
+  background: var(--coordinates-sheet);
+  border: 1px solid var(--coordinates-line);
+  padding: 0.45rem 0.55rem;
+  cursor: pointer;
+}
+
 .coordinates-switch-input:focus-visible + .coordinates-track,
 .coordinates-action:focus-visible,
+.coordinates-interval-input:focus-visible,
 .coordinates-dialog-actions button:focus-visible {
   outline: 3px solid var(--coordinates-signal);
   outline-offset: 2px;

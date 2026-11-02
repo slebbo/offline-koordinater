@@ -9,6 +9,12 @@
 // gesture to preserve, so it may ask the Permissions API first and skip
 // browsers that would swallow the call.
 
+import {
+  DEFAULT_POLL_INTERVAL_MS,
+  canonicalPollInterval,
+  usesDevicePace,
+} from "./interval.js";
+
 const ACQUIRE_STALE_MS = 120000;
 const PERMISSION_QUERY_MS = 2500;
 const PROMPT_STALL_MS = 10000;
@@ -19,6 +25,7 @@ const PERSISTED_FIELDS = [
   "latitude",
   "updatedAt",
   "polling",
+  "pollIntervalMs",
   "acquiring",
   "acquiringSince",
   "acquireMode",
@@ -31,6 +38,8 @@ const TRACKING_FIELDS = new Set(["polling", "acquiring", "acquireMode"]);
 // Page script cannot cancel that request. Android Chrome asks the platform
 // location service instead, so a GPS fix can arrive while that request fails.
 const ONESHOT_OPTIONS = { enableHighAccuracy: true, maximumAge: 0, timeout: 60000 };
+// maximumAge here allows a cached fix. It does not set how often the device
+// delivers one. High accuracy often arrives about once a second.
 const WATCH_OPTIONS = { enableHighAccuracy: true, maximumAge: 5000, timeout: 60000 };
 const ERROR_CODES = { 1: "denied", 2: "unavailable", 3: "timeout" };
 const FATAL_ERRORS = new Set(["denied", "unsupported", "insecure", "policy", "blocked"]);
@@ -40,6 +49,7 @@ const IDLE_STATE = {
   latitude: null,
   updatedAt: null,
   polling: false,
+  pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
   acquiring: false,
   acquiringSince: null,
   acquireMode: null,
@@ -56,6 +66,7 @@ const GLOBAL_SLOT = "__offlineKoordinater";
  * @property {number | null} latitude
  * @property {number | null} updatedAt
  * @property {boolean} polling
+ * @property {number} pollIntervalMs
  * @property {boolean} acquiring
  * @property {number | null} acquiringSince
  * @property {AcquireMode} acquireMode
@@ -79,6 +90,9 @@ const GLOBAL_SLOT = "__offlineKoordinater";
  * @property {(mode: "oneshot" | "poll") => void} request
  * @property {() => void} refreshNow
  * @property {() => void} stopPolling
+ * @property {(ms: number) => void} setPollInterval
+ *   Snap to the nearest allowed interval and, when polling is already on,
+ *   use it for the next read. Does not ask for permission.
  */
 
 /**
@@ -126,6 +140,7 @@ function serverController() {
     request() {},
     refreshNow() {},
     stopPolling() {},
+    setPollInterval() {},
   };
 }
 
@@ -158,6 +173,17 @@ function createEngine(options) {
   let watchToken = 0;
   let oneshotToken = 0;
   let oneshotActive = false;
+  // Coarser than device pace: one getCurrentPosition per interval. The timer
+  // is armed only while this document holds the lock.
+  let sampleTimer = null;
+  let sampleGeneration = 0;
+  // Local time when the current one-shot read started. Used so the gap is
+  // measured between attempts, not between the moments fixes arrive.
+  let sampleStartedAt = 0;
+  // Local time of the latest accepted fix, or 0 when there is none.
+  let lastSuccessAt = 0;
+  // Earliest local time a failed interval read may be tried again.
+  let backoffUntil = 0;
   // True while a getCurrentPosition call must not be cancelled by the lock
   // releasing, and while watchPosition should wait so an early watch error
   // cannot cancel that call. On a click this is the user gesture.
@@ -179,6 +205,7 @@ function createEngine(options) {
       latitude: geo.latitude,
       updatedAt: geo.updatedAt,
       polling: geo.polling,
+      pollIntervalMs: geo.pollIntervalMs,
       acquiring: geo.acquiring,
       acquiringSince: geo.acquiringSince,
       acquireMode: geo.acquireMode,
@@ -253,7 +280,56 @@ function createEngine(options) {
         // Ignore a broken value and keep the idle field.
       }
     }
+    const storedInterval = Object.prototype.hasOwnProperty.call(patch, "pollIntervalMs")
+      ? patch.pollIntervalMs
+      : undefined;
+    normalizeStoredPatch(patch);
     adopt(patch, { persist: false, notify: false });
+    if (storedInterval !== undefined && storedInterval !== geo.pollIntervalMs) {
+      storageSet(`${prefix}.pollIntervalMs`, geo.pollIntervalMs);
+    }
+    seedSchedule();
+  }
+
+  function normalizeStoredPatch(patch) {
+    if (!Object.prototype.hasOwnProperty.call(patch, "pollIntervalMs")) return patch;
+    patch.pollIntervalMs = canonicalPollInterval(patch.pollIntervalMs);
+    return patch;
+  }
+
+  function seedSchedule() {
+    const now = Date.now();
+    const stamp = Number(geo.updatedAt);
+    lastSuccessAt = Number.isFinite(stamp) && stamp > 0 && stamp <= now + 2000
+      ? Math.min(stamp, now)
+      : 0;
+    backoffUntil = 0;
+    sampleStartedAt = 0;
+  }
+
+  function devicePace() {
+    return usesDevicePace(geo.pollIntervalMs);
+  }
+
+  function noteSuccess(timestamp) {
+    const now = Date.now();
+    if (!devicePace() && sampleStartedAt > 0 && sampleStartedAt <= now) {
+      lastSuccessAt = sampleStartedAt;
+    } else {
+      const stamp = Number(timestamp);
+      lastSuccessAt = Number.isFinite(stamp) ? Math.min(Math.max(stamp, 0), now) : now;
+    }
+    backoffUntil = 0;
+  }
+
+  function noteSampleFailure() {
+    backoffUntil = Date.now() + geo.pollIntervalMs;
+  }
+
+  function sampleWait() {
+    const fromSuccess = lastSuccessAt ? lastSuccessAt + geo.pollIntervalMs : 0;
+    const due = Math.max(fromSuccess, backoffUntil);
+    return Math.max(0, due - Date.now());
   }
 
   function installRuntime() {
@@ -363,7 +439,7 @@ function createEngine(options) {
     granted = true;
     clearPromptTimer();
     if (geo.error === "blocked" || geo.error === "denied") adopt({ error: null });
-    ensureWatch();
+    ensureSampling();
   }
 
   function applyPermissionState(value, token) {
@@ -569,13 +645,64 @@ function createEngine(options) {
       ? Boolean(geo.acquiring || geo.immediate)
       : Boolean(geo.immediate || (geo.acquiring && geo.acquireMode === "oneshot" && !geo.polling));
     if (wantOneshot) startOneshot();
-    if (!fromGesture) ensureWatch();
+    if (!fromGesture) ensureSampling();
   }
 
-  function ensureWatch() {
-    if (gesturePending || document.visibilityState !== "visible") return;
-    if (!geo.polling) return;
-    startWatch();
+  // Device pace keeps a watch. Every coarser interval waits, then reads once,
+  // so the device is not asked on every GPS tick.
+  function ensureSampling() {
+    if (gesturePending || oneshotActive || document.visibilityState !== "visible") return;
+    if (!geo.polling || !leading) return;
+    if (devicePace()) {
+      clearSampleTimer();
+      startWatch();
+      return;
+    }
+    stopWatchOnly();
+    if (sampleTimer != null) return;
+    scheduleSample();
+  }
+
+  function retargetSampling() {
+    clearSampleTimer();
+    if (!devicePace()) stopWatchOnly();
+    ensureSampling();
+  }
+
+  function clearSampleTimer() {
+    sampleGeneration += 1;
+    if (sampleTimer != null) clearTimeout(sampleTimer);
+    sampleTimer = null;
+  }
+
+  function scheduleSample() {
+    if (sampleTimer != null) return;
+    const generation = sampleGeneration;
+    const wait = sampleWait();
+    sampleTimer = setTimeout(() => {
+      if (generation !== sampleGeneration) return;
+      sampleTimer = null;
+      startScheduledSample();
+    }, wait);
+  }
+
+  function startScheduledSample() {
+    if (document.visibilityState !== "visible" || !leading) return;
+    if (oneshotActive || gesturePending || !geo.polling || devicePace()) return;
+    if (!canReadLocation()) return;
+    adopt({
+      acquiring: true,
+      acquiringSince: Date.now(),
+      error: null,
+    });
+    startOneshot();
+  }
+
+  function stopWatchOnly() {
+    if (watchId == null) return;
+    watchToken += 1;
+    if (canReadLocation()) navigator.geolocation.clearWatch(watchId);
+    watchId = null;
   }
 
   function stopHardware() {
@@ -583,6 +710,7 @@ function createEngine(options) {
     oneshotToken += 1;
     oneshotActive = false;
     gesturePending = false;
+    clearSampleTimer();
     if (watchId != null && canReadLocation()) navigator.geolocation.clearWatch(watchId);
     watchId = null;
   }
@@ -622,6 +750,7 @@ function createEngine(options) {
   function startOneshot() {
     if (oneshotActive || !canReadLocation()) return;
     oneshotActive = true;
+    sampleStartedAt = Date.now();
     const token = ++oneshotToken;
     adopt({ immediate: false });
     try {
@@ -665,6 +794,7 @@ function createEngine(options) {
     if (!fix) return;
     granted = true;
     clearPromptTimer();
+    noteSuccess(fix.timestamp);
     const patch = {
       longitude: fix.longitude,
       latitude: fix.latitude,
@@ -676,7 +806,7 @@ function createEngine(options) {
     };
     if (!geo.polling) patch.acquireMode = null;
     adopt(patch);
-    ensureWatch();
+    ensureSampling();
     syncTracking();
   }
 
@@ -692,6 +822,7 @@ function createEngine(options) {
     if (geo.error === "denied" && code !== "denied") code = "denied";
     clearPromptTimer();
     const fatal = isFatal(code);
+    if (!fatal && geo.polling && !devicePace()) noteSampleFailure();
     const patch = {
       acquiring: false,
       acquiringSince: null,
@@ -706,7 +837,7 @@ function createEngine(options) {
     }
     adopt(patch);
     if (fatal) stopHardware();
-    else ensureWatch();
+    else ensureSampling();
     syncTracking();
   }
 
@@ -721,7 +852,10 @@ function createEngine(options) {
     } catch {
       return;
     }
-    const trackingChanged = adopt({ [field]: value }, { persist: false });
+    const patch = normalizeStoredPatch({ [field]: value });
+    const previousInterval = geo.pollIntervalMs;
+    const trackingChanged = adopt(patch, { persist: false });
+    if (geo.pollIntervalMs !== previousInterval) retargetSampling();
     if (trackingChanged) syncTracking();
   }
 
@@ -736,7 +870,10 @@ function createEngine(options) {
         continue;
       }
     }
+    normalizeStoredPatch(patch);
+    const previousInterval = geo.pollIntervalMs;
     const trackingChanged = adopt(patch, { persist: false });
+    if (geo.pollIntervalMs !== previousInterval) retargetSampling();
     if (trackingChanged) syncTracking();
   }
 
@@ -798,6 +935,12 @@ function createEngine(options) {
     },
     stopPolling() {
       haltPolling();
+    },
+    setPollInterval(ms) {
+      const next = canonicalPollInterval(ms);
+      if (next === geo.pollIntervalMs) return;
+      adopt({ pollIntervalMs: next });
+      retargetSampling();
     },
   };
 
