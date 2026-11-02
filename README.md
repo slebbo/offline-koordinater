@@ -15,9 +15,24 @@ import { startCoordinates } from "./coordinates/index.js";
 import "./coordinates/panel.css";
 
 startCoordinates({
+  mode: "poll",
+  pollIntervalMs: 60000,
   requestAccessOnLoad: true,
 });
 ```
+
+`mode` sätter läget för det här dokumentet. Första anropet vinner, samma regel som för `storagePrefix`.
+
+| `mode` | Effekt |
+| --- | --- |
+| utelämnad | Reglagens senaste val ligger kvar. |
+| `"manual"` eller `"oneshot"` | Pollning och hämtning vid sidladdning är av. |
+| `"poll"` | Löpande läsning med sparad upplösning. |
+| `"load"` | En ny träff vid varje sidladdning. |
+
+Ett angivet läge ersätter det som reglagen sparade förra gången. `"poll"` och `"load"` är ett läge var: det andra slås av. `pollIntervalMs` snappar till närmaste tillåtna upplösning. Utelämnad ligger den sparade kvar.
+
+Läsningen startar när tillståndet redan är givet, eller när webbläsaren kan fråga utan ett tryck. Safari och webbläsare på iPhone och iPad sparar läget men väntar med GPS tills ett reglage trycks, om frågan inte är avgjord. Ett nekat tillstånd sparas som fel och läget slås av.
 
 CSS-filen behövs bara om någon sida ritar panelen eller avläsningen. Importen av JavaScript är ofarlig under SSR. Anropa `startCoordinates` i webbläsaren. Anropas den ändå utan `window` gör den ingenting och rör inte `localStorage`.
 
@@ -33,7 +48,7 @@ CSS-filen behövs bara om någon sida ritar panelen eller avläsningen. Importen
 | Frågan är inte avgjord, Safari eller någon webbläsare på iPhone eller iPad | Ingenting. De visar platsfrågan bara i samma tryck som ett klick. Reglagen är vägen dit. |
 | Pollning eller en hämtning pågår redan | Den lämnas ifred. |
 
-Optionen är av som standard. POC:n slår på den om `<html>` har `data-request-access="true"`, eller om adressen har `?request-access`. Reglaget **Hämta vid sidladdning** är ett annat val: det läser en ny träff vid varje sidladdning även när en redan finns.
+Optionen är av som standard. POC:n slår på den om `<html>` har `data-request-access="true"`, eller om adressen har `?request-access`. Adressen `?mode=poll` eller `?mode=load` startar demon i det läget. `?interval=60000` sätter upplösningen i millisekunder. Reglaget **Hämta vid sidladdning** är ett annat val: det läser en ny träff vid varje sidladdning även när en redan finns.
 
 En väntande fråga ställs igen vid nästa sidladdning, tills webbläsaren har ett ja eller nej. Det är meningen när optionen är på på varje sida.
 

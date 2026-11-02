@@ -88,6 +88,17 @@ const GLOBAL_SLOT = "__offlineKoordinater";
  *   browser still needs a user gesture to show the prompt (Safari, and
  *   every browser on iPhone and iPad), a pending prompt is skipped and the
  *   controls remain the way to ask.
+ * @property {"manual" | "oneshot" | "poll" | "load"} [mode]
+ *   Mode for this document. The first call wins. `poll` reads continuously
+ *   at the stored interval. `load` reads once on each document load.
+ *   `manual` and `oneshot` leave both of those off. Omitted keeps whatever
+ *   the switches last saved. A passed mode replaces that saved choice.
+ *   The read starts when permission is already granted, or when this browser
+ *   can ask without a tap. Safari still needs the confirm control the first
+ *   time; the mode stays saved until then.
+ * @property {number} [pollIntervalMs]
+ *   Sample interval, snapped to the nearest allowed value. Omitted keeps the
+ *   stored interval.
  * @property {string} [storagePrefix="ok"]
  * @property {string} [lockName="offline-koordinater-geo"]
  * @typedef {Object} CoordinatesController
@@ -152,13 +163,20 @@ function serverController() {
   };
 }
 
+const INIT_MODES = new Set(["manual", "oneshot", "poll", "load"]);
+
 function normalizeOptions(options) {
   const prefix = typeof options.storagePrefix === "string" ? options.storagePrefix.trim() : "";
   const lockName = typeof options.lockName === "string" ? options.lockName.trim() : "";
+  const requested = typeof options.mode === "string" ? options.mode.trim() : "";
+  const mode = INIT_MODES.has(requested) ? (requested === "oneshot" ? "manual" : requested) : null;
+  const interval = options.pollIntervalMs;
   return {
     requestAccessOnLoad: Boolean(options.requestAccessOnLoad),
     storagePrefix: prefix || DEFAULT_PREFIX,
     lockName: lockName || DEFAULT_LOCK_NAME,
+    mode,
+    pollIntervalMs: interval == null || interval === "" ? null : interval,
   };
 }
 
@@ -206,6 +224,10 @@ function createEngine(options) {
   let accessGeneration = 0;
   let accessStarted = false;
   let accessWaitInstalled = false;
+  // True while an init mode is waiting on the permission query. Tracking
+  // must not start before that, or Safari calls getCurrentPosition with no
+  // tap and then never answers.
+  let deferTracking = false;
 
   function publicState() {
     return {
@@ -362,8 +384,68 @@ function createEngine(options) {
       }
       syncTracking();
     });
+    if (options.pollIntervalMs != null) {
+      adopt({ pollIntervalMs: canonicalPollInterval(options.pollIntervalMs) });
+    }
+    if (options.mode === "manual") {
+      adopt({
+        polling: false,
+        readOnLoad: false,
+        immediate: false,
+        acquiring: false,
+        acquiringSince: null,
+        acquireMode: null,
+      });
+    } else if (options.mode === "poll" || options.mode === "load") {
+      deferTracking = true;
+      adopt(options.mode === "poll"
+        ? {
+          polling: true,
+          readOnLoad: false,
+          acquireMode: "poll",
+          immediate: false,
+          acquiring: false,
+          acquiringSince: null,
+          error: null,
+        }
+        : {
+          polling: false,
+          readOnLoad: true,
+          acquireMode: null,
+          immediate: false,
+          acquiring: false,
+          acquiringSince: null,
+          error: null,
+        });
+      void armConfiguredMode(options.mode);
+      return;
+    }
     syncTracking();
     if (geo.readOnLoad) readForLoad();
+  }
+
+  function canStartWithoutGesture(state) {
+    if (state === "granted") return true;
+    if (state === "denied") return false;
+    return canPromptWithoutGesture();
+  }
+
+  async function armConfiguredMode(mode) {
+    const blocker = syncBlocker();
+    if (blocker) {
+      deferTracking = false;
+      applyPreflight(blocker, mode === "poll" ? "poll" : "oneshot");
+      return;
+    }
+    const result = await queryPermission();
+    deferTracking = false;
+    if (result.state === "denied") {
+      applyPreflight("denied", mode === "poll" ? "poll" : "oneshot");
+      return;
+    }
+    if (!canStartWithoutGesture(result.state)) return;
+    if (mode === "load") readForLoad();
+    else syncTracking();
   }
 
   function expireStaleAcquire() {
@@ -651,6 +733,7 @@ function createEngine(options) {
   }
 
   function syncTracking() {
+    if (deferTracking) return;
     desired = shouldTrack() && document.visibilityState === "visible";
     if (desired && !running) {
       void lead();
