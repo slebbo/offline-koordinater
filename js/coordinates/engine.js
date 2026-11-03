@@ -9,6 +9,12 @@
 // gesture to preserve, so it may ask the Permissions API first and skip
 // browsers that would swallow the call.
 
+import {
+  DEFAULT_POLL_INTERVAL_MS,
+  canonicalPollInterval,
+  usesDevicePace,
+} from "./interval.js";
+
 const ACQUIRE_STALE_MS = 120000;
 const PERMISSION_QUERY_MS = 2500;
 const PROMPT_STALL_MS = 10000;
@@ -19,6 +25,8 @@ const PERSISTED_FIELDS = [
   "latitude",
   "updatedAt",
   "polling",
+  "pollIntervalMs",
+  "readOnLoad",
   "acquiring",
   "acquiringSince",
   "acquireMode",
@@ -31,6 +39,8 @@ const TRACKING_FIELDS = new Set(["polling", "acquiring", "acquireMode"]);
 // Page script cannot cancel that request. Android Chrome asks the platform
 // location service instead, so a GPS fix can arrive while that request fails.
 const ONESHOT_OPTIONS = { enableHighAccuracy: true, maximumAge: 0, timeout: 60000 };
+// maximumAge here allows a cached fix. It does not set how often the device
+// delivers one. High accuracy often arrives about once a second.
 const WATCH_OPTIONS = { enableHighAccuracy: true, maximumAge: 5000, timeout: 60000 };
 const ERROR_CODES = { 1: "denied", 2: "unavailable", 3: "timeout" };
 const FATAL_ERRORS = new Set(["denied", "unsupported", "insecure", "policy", "blocked"]);
@@ -40,6 +50,8 @@ const IDLE_STATE = {
   latitude: null,
   updatedAt: null,
   polling: false,
+  pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
+  readOnLoad: false,
   acquiring: false,
   acquiringSince: null,
   acquireMode: null,
@@ -56,6 +68,11 @@ const GLOBAL_SLOT = "__offlineKoordinater";
  * @property {number | null} latitude
  * @property {number | null} updatedAt
  * @property {boolean} polling
+ * @property {number} pollIntervalMs
+ * @property {boolean} readOnLoad
+ *   When true, each document load reads one fresh fix. A route change inside
+ *   the same document does not. The switch that turns this on has to call
+ *   `request("load")` in the tap, so Safari can show its prompt.
  * @property {boolean} acquiring
  * @property {number | null} acquiringSince
  * @property {AcquireMode} acquireMode
@@ -71,14 +88,29 @@ const GLOBAL_SLOT = "__offlineKoordinater";
  *   browser still needs a user gesture to show the prompt (Safari, and
  *   every browser on iPhone and iPad), a pending prompt is skipped and the
  *   controls remain the way to ask.
+ * @property {"manual" | "oneshot" | "poll" | "load"} [mode]
+ *   Mode for this document. The first call wins. `poll` reads continuously
+ *   at the stored interval. `load` reads once on each document load.
+ *   `manual` and `oneshot` leave both of those off. Omitted keeps whatever
+ *   the switches last saved. A passed mode replaces that saved choice.
+ *   The read starts when permission is already granted, or when this browser
+ *   can ask without a tap. Safari still needs the confirm control the first
+ *   time; the mode stays saved until then.
+ * @property {number} [pollIntervalMs]
+ *   Sample interval, snapped to the nearest allowed value. Omitted keeps the
+ *   stored interval.
  * @property {string} [storagePrefix="ok"]
  * @property {string} [lockName="offline-koordinater-geo"]
  * @typedef {Object} CoordinatesController
  * @property {() => CoordinatesState} getState
  * @property {(listener: (state: CoordinatesState) => void) => () => void} subscribe
- * @property {(mode: "oneshot" | "poll") => void} request
+ * @property {(mode: "oneshot" | "poll" | "load") => void} request
  * @property {() => void} refreshNow
  * @property {() => void} stopPolling
+ * @property {() => void} stopReadOnLoad
+ * @property {(ms: number) => void} setPollInterval
+ *   Snap to the nearest allowed interval and, when polling is already on,
+ *   use it for the next read. Does not ask for permission.
  */
 
 /**
@@ -126,16 +158,25 @@ function serverController() {
     request() {},
     refreshNow() {},
     stopPolling() {},
+    stopReadOnLoad() {},
+    setPollInterval() {},
   };
 }
+
+const INIT_MODES = new Set(["manual", "oneshot", "poll", "load"]);
 
 function normalizeOptions(options) {
   const prefix = typeof options.storagePrefix === "string" ? options.storagePrefix.trim() : "";
   const lockName = typeof options.lockName === "string" ? options.lockName.trim() : "";
+  const requested = typeof options.mode === "string" ? options.mode.trim() : "";
+  const mode = INIT_MODES.has(requested) ? (requested === "oneshot" ? "manual" : requested) : null;
+  const interval = options.pollIntervalMs;
   return {
     requestAccessOnLoad: Boolean(options.requestAccessOnLoad),
     storagePrefix: prefix || DEFAULT_PREFIX,
     lockName: lockName || DEFAULT_LOCK_NAME,
+    mode,
+    pollIntervalMs: interval == null || interval === "" ? null : interval,
   };
 }
 
@@ -158,6 +199,17 @@ function createEngine(options) {
   let watchToken = 0;
   let oneshotToken = 0;
   let oneshotActive = false;
+  // Coarser than device pace: one getCurrentPosition per interval. The timer
+  // is armed only while this document holds the lock.
+  let sampleTimer = null;
+  let sampleGeneration = 0;
+  // Local time when the current one-shot read started. Used so the gap is
+  // measured between attempts, not between the moments fixes arrive.
+  let sampleStartedAt = 0;
+  // Local time of the latest accepted fix, or 0 when there is none.
+  let lastSuccessAt = 0;
+  // Earliest local time a failed interval read may be tried again.
+  let backoffUntil = 0;
   // True while a getCurrentPosition call must not be cancelled by the lock
   // releasing, and while watchPosition should wait so an early watch error
   // cannot cancel that call. On a click this is the user gesture.
@@ -172,6 +224,10 @@ function createEngine(options) {
   let accessGeneration = 0;
   let accessStarted = false;
   let accessWaitInstalled = false;
+  // True while an init mode is waiting on the permission query. Tracking
+  // must not start before that, or Safari calls getCurrentPosition with no
+  // tap and then never answers.
+  let deferTracking = false;
 
   function publicState() {
     return {
@@ -179,6 +235,8 @@ function createEngine(options) {
       latitude: geo.latitude,
       updatedAt: geo.updatedAt,
       polling: geo.polling,
+      pollIntervalMs: geo.pollIntervalMs,
+      readOnLoad: geo.readOnLoad,
       acquiring: geo.acquiring,
       acquiringSince: geo.acquiringSince,
       acquireMode: geo.acquireMode,
@@ -253,7 +311,60 @@ function createEngine(options) {
         // Ignore a broken value and keep the idle field.
       }
     }
+    const storedInterval = Object.prototype.hasOwnProperty.call(patch, "pollIntervalMs")
+      ? patch.pollIntervalMs
+      : undefined;
+    normalizeStoredPatch(patch);
     adopt(patch, { persist: false, notify: false });
+    if (storedInterval !== undefined && storedInterval !== geo.pollIntervalMs) {
+      storageSet(`${prefix}.pollIntervalMs`, geo.pollIntervalMs);
+    }
+    seedSchedule();
+  }
+
+  function normalizeStoredPatch(patch) {
+    if (Object.prototype.hasOwnProperty.call(patch, "pollIntervalMs")) {
+      patch.pollIntervalMs = canonicalPollInterval(patch.pollIntervalMs);
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "readOnLoad")) {
+      patch.readOnLoad = patch.readOnLoad === true;
+    }
+    return patch;
+  }
+
+  function seedSchedule() {
+    const now = Date.now();
+    const stamp = Number(geo.updatedAt);
+    lastSuccessAt = Number.isFinite(stamp) && stamp > 0 && stamp <= now + 2000
+      ? Math.min(stamp, now)
+      : 0;
+    backoffUntil = 0;
+    sampleStartedAt = 0;
+  }
+
+  function devicePace() {
+    return usesDevicePace(geo.pollIntervalMs);
+  }
+
+  function noteSuccess(timestamp) {
+    const now = Date.now();
+    if (!devicePace() && sampleStartedAt > 0 && sampleStartedAt <= now) {
+      lastSuccessAt = sampleStartedAt;
+    } else {
+      const stamp = Number(timestamp);
+      lastSuccessAt = Number.isFinite(stamp) ? Math.min(Math.max(stamp, 0), now) : now;
+    }
+    backoffUntil = 0;
+  }
+
+  function noteSampleFailure() {
+    backoffUntil = Date.now() + geo.pollIntervalMs;
+  }
+
+  function sampleWait() {
+    const fromSuccess = lastSuccessAt ? lastSuccessAt + geo.pollIntervalMs : 0;
+    const due = Math.max(fromSuccess, backoffUntil);
+    return Math.max(0, due - Date.now());
   }
 
   function installRuntime() {
@@ -266,10 +377,75 @@ function createEngine(options) {
       leaderAbort?.abort();
     });
     window.addEventListener("pageshow", (event) => {
-      if (event.persisted) pullPersistedFields();
+      if (event.persisted) {
+        pullPersistedFields();
+        // Returning from the back-forward cache is another opening of the page.
+        if (geo.readOnLoad) readForLoad();
+      }
       syncTracking();
     });
+    if (options.pollIntervalMs != null) {
+      adopt({ pollIntervalMs: canonicalPollInterval(options.pollIntervalMs) });
+    }
+    if (options.mode === "manual") {
+      adopt({
+        polling: false,
+        readOnLoad: false,
+        immediate: false,
+        acquiring: false,
+        acquiringSince: null,
+        acquireMode: null,
+      });
+    } else if (options.mode === "poll" || options.mode === "load") {
+      deferTracking = true;
+      adopt(options.mode === "poll"
+        ? {
+          polling: true,
+          readOnLoad: false,
+          acquireMode: "poll",
+          immediate: false,
+          acquiring: false,
+          acquiringSince: null,
+          error: null,
+        }
+        : {
+          polling: false,
+          readOnLoad: true,
+          acquireMode: null,
+          immediate: false,
+          acquiring: false,
+          acquiringSince: null,
+          error: null,
+        });
+      void armConfiguredMode(options.mode);
+      return;
+    }
     syncTracking();
+    if (geo.readOnLoad) readForLoad();
+  }
+
+  function canStartWithoutGesture(state) {
+    if (state === "granted") return true;
+    if (state === "denied") return false;
+    return canPromptWithoutGesture();
+  }
+
+  async function armConfiguredMode(mode) {
+    const blocker = syncBlocker();
+    if (blocker) {
+      deferTracking = false;
+      applyPreflight(blocker, mode === "poll" ? "poll" : "oneshot");
+      return;
+    }
+    const result = await queryPermission();
+    deferTracking = false;
+    if (result.state === "denied") {
+      applyPreflight("denied", mode === "poll" ? "poll" : "oneshot");
+      return;
+    }
+    if (!canStartWithoutGesture(result.state)) return;
+    if (mode === "load") readForLoad();
+    else syncTracking();
   }
 
   function expireStaleAcquire() {
@@ -363,7 +539,7 @@ function createEngine(options) {
     granted = true;
     clearPromptTimer();
     if (geo.error === "blocked" || geo.error === "denied") adopt({ error: null });
-    ensureWatch();
+    ensureSampling();
   }
 
   function applyPermissionState(value, token) {
@@ -423,6 +599,7 @@ function createEngine(options) {
       immediate: false,
     };
     if (fatal || mode === "poll") patch.polling = false;
+    if (fatal) patch.readOnLoad = false;
     if (fatal || mode === "poll" || !geo.polling) patch.acquireMode = null;
     adopt(patch);
     syncTracking();
@@ -431,8 +608,12 @@ function createEngine(options) {
   function beginRequest(mode) {
     // A click supersedes an in-flight load-time ask.
     accessGeneration += 1;
+    if (mode === "load") adopt({ readOnLoad: true });
     if (mode === "poll" && geo.polling && !geo.error) return;
-    if (mode !== "poll" && geo.acquiring && !geo.polling && !geo.error) return;
+    // The mode is already stored. A read that is already running on this
+    // document covers the tap; the next document load reads again.
+    if (mode === "load" && geo.acquiring && !geo.polling && !geo.error) return;
+    if (mode === "oneshot" && geo.acquiring && !geo.polling && !geo.error) return;
     const blocker = syncBlocker();
     if (blocker) {
       applyPreflight(blocker, mode);
@@ -448,6 +629,13 @@ function createEngine(options) {
       patch.polling = true;
       patch.acquireMode = "poll";
       patch.immediate = false;
+    } else if (mode === "load") {
+      patch.readOnLoad = true;
+      if (geo.polling) patch.immediate = true;
+      else {
+        patch.acquireMode = "oneshot";
+        patch.immediate = false;
+      }
     } else if (geo.polling) {
       patch.immediate = true;
     } else {
@@ -479,6 +667,33 @@ function createEngine(options) {
     kickFromGesture();
   }
 
+  // One fresh fix per document when the user asked for a read on each open.
+  // Permission was granted by the switch's tap. This call has no new tap, so
+  // it does not try to preserve a user gesture.
+  function readForLoad() {
+    if (!geo.readOnLoad || oneshotActive) return;
+    const blocker = syncBlocker();
+    if (blocker) {
+      applyPreflight(blocker, "oneshot");
+      return;
+    }
+    accessGeneration += 1;
+    stopHardware();
+    const patch = {
+      error: null,
+      acquiring: true,
+      acquiringSince: Date.now(),
+    };
+    if (geo.polling) patch.immediate = true;
+    else {
+      patch.acquireMode = "oneshot";
+      patch.immediate = false;
+    }
+    adopt(patch);
+    startAttempt();
+    kickFromGesture();
+  }
+
   function haltPolling() {
     const patch = {
       polling: false,
@@ -488,6 +703,18 @@ function createEngine(options) {
       patch.acquiring = false;
       patch.acquiringSince = null;
       patch.acquireMode = null;
+    }
+    adopt(patch);
+    syncTracking();
+  }
+
+  function haltLoadRead() {
+    const patch = { readOnLoad: false };
+    if (!geo.polling && geo.acquireMode === "oneshot") {
+      patch.acquiring = false;
+      patch.acquiringSince = null;
+      patch.acquireMode = null;
+      patch.immediate = false;
     }
     adopt(patch);
     syncTracking();
@@ -506,6 +733,7 @@ function createEngine(options) {
   }
 
   function syncTracking() {
+    if (deferTracking) return;
     desired = shouldTrack() && document.visibilityState === "visible";
     if (desired && !running) {
       void lead();
@@ -569,13 +797,64 @@ function createEngine(options) {
       ? Boolean(geo.acquiring || geo.immediate)
       : Boolean(geo.immediate || (geo.acquiring && geo.acquireMode === "oneshot" && !geo.polling));
     if (wantOneshot) startOneshot();
-    if (!fromGesture) ensureWatch();
+    if (!fromGesture) ensureSampling();
   }
 
-  function ensureWatch() {
-    if (gesturePending || document.visibilityState !== "visible") return;
-    if (!geo.polling) return;
-    startWatch();
+  // Device pace keeps a watch. Every coarser interval waits, then reads once,
+  // so the device is not asked on every GPS tick.
+  function ensureSampling() {
+    if (gesturePending || oneshotActive || document.visibilityState !== "visible") return;
+    if (!geo.polling || !leading) return;
+    if (devicePace()) {
+      clearSampleTimer();
+      startWatch();
+      return;
+    }
+    stopWatchOnly();
+    if (sampleTimer != null) return;
+    scheduleSample();
+  }
+
+  function retargetSampling() {
+    clearSampleTimer();
+    if (!devicePace()) stopWatchOnly();
+    ensureSampling();
+  }
+
+  function clearSampleTimer() {
+    sampleGeneration += 1;
+    if (sampleTimer != null) clearTimeout(sampleTimer);
+    sampleTimer = null;
+  }
+
+  function scheduleSample() {
+    if (sampleTimer != null) return;
+    const generation = sampleGeneration;
+    const wait = sampleWait();
+    sampleTimer = setTimeout(() => {
+      if (generation !== sampleGeneration) return;
+      sampleTimer = null;
+      startScheduledSample();
+    }, wait);
+  }
+
+  function startScheduledSample() {
+    if (document.visibilityState !== "visible" || !leading) return;
+    if (oneshotActive || gesturePending || !geo.polling || devicePace()) return;
+    if (!canReadLocation()) return;
+    adopt({
+      acquiring: true,
+      acquiringSince: Date.now(),
+      error: null,
+    });
+    startOneshot();
+  }
+
+  function stopWatchOnly() {
+    if (watchId == null) return;
+    watchToken += 1;
+    if (canReadLocation()) navigator.geolocation.clearWatch(watchId);
+    watchId = null;
   }
 
   function stopHardware() {
@@ -583,6 +862,7 @@ function createEngine(options) {
     oneshotToken += 1;
     oneshotActive = false;
     gesturePending = false;
+    clearSampleTimer();
     if (watchId != null && canReadLocation()) navigator.geolocation.clearWatch(watchId);
     watchId = null;
   }
@@ -622,6 +902,7 @@ function createEngine(options) {
   function startOneshot() {
     if (oneshotActive || !canReadLocation()) return;
     oneshotActive = true;
+    sampleStartedAt = Date.now();
     const token = ++oneshotToken;
     adopt({ immediate: false });
     try {
@@ -665,6 +946,7 @@ function createEngine(options) {
     if (!fix) return;
     granted = true;
     clearPromptTimer();
+    noteSuccess(fix.timestamp);
     const patch = {
       longitude: fix.longitude,
       latitude: fix.latitude,
@@ -676,7 +958,7 @@ function createEngine(options) {
     };
     if (!geo.polling) patch.acquireMode = null;
     adopt(patch);
-    ensureWatch();
+    ensureSampling();
     syncTracking();
   }
 
@@ -692,6 +974,7 @@ function createEngine(options) {
     if (geo.error === "denied" && code !== "denied") code = "denied";
     clearPromptTimer();
     const fatal = isFatal(code);
+    if (!fatal && geo.polling && !devicePace()) noteSampleFailure();
     const patch = {
       acquiring: false,
       acquiringSince: null,
@@ -700,13 +983,14 @@ function createEngine(options) {
     };
     if (fatal) {
       patch.polling = false;
+      patch.readOnLoad = false;
       patch.acquireMode = null;
     } else if (geo.acquireMode === "oneshot") {
       patch.acquireMode = null;
     }
     adopt(patch);
     if (fatal) stopHardware();
-    else ensureWatch();
+    else ensureSampling();
     syncTracking();
   }
 
@@ -721,7 +1005,10 @@ function createEngine(options) {
     } catch {
       return;
     }
-    const trackingChanged = adopt({ [field]: value }, { persist: false });
+    const patch = normalizeStoredPatch({ [field]: value });
+    const previousInterval = geo.pollIntervalMs;
+    const trackingChanged = adopt(patch, { persist: false });
+    if (geo.pollIntervalMs !== previousInterval) retargetSampling();
     if (trackingChanged) syncTracking();
   }
 
@@ -736,7 +1023,10 @@ function createEngine(options) {
         continue;
       }
     }
+    normalizeStoredPatch(patch);
+    const previousInterval = geo.pollIntervalMs;
     const trackingChanged = adopt(patch, { persist: false });
+    if (geo.pollIntervalMs !== previousInterval) retargetSampling();
     if (trackingChanged) syncTracking();
   }
 
@@ -790,7 +1080,7 @@ function createEngine(options) {
     getState: publicState,
     subscribe,
     request(mode) {
-      if (mode !== "oneshot" && mode !== "poll") return;
+      if (mode !== "oneshot" && mode !== "poll" && mode !== "load") return;
       beginRequest(mode);
     },
     refreshNow() {
@@ -798,6 +1088,15 @@ function createEngine(options) {
     },
     stopPolling() {
       haltPolling();
+    },
+    stopReadOnLoad() {
+      haltLoadRead();
+    },
+    setPollInterval(ms) {
+      const next = canonicalPollInterval(ms);
+      if (next === geo.pollIntervalMs) return;
+      adopt({ pollIntervalMs: next });
+      retargetSampling();
     },
   };
 

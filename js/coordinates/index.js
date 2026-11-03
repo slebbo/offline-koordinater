@@ -4,3 +4,8 @@
 
 export { startCoordinates, getCoordinates } from "./engine.js";
 export { mountCoordinatesPanel, mountCoordinatesReadout } from "./panel.js";
+export {
+  DEFAULT_POLL_INTERVAL_MS,
+  POLL_INTERVALS_MS,
+  canonicalPollInterval,
+} from "./interval.js";

@@ -15,9 +15,24 @@ import { startCoordinates } from "./coordinates/index.js";
 import "./coordinates/panel.css";
 
 startCoordinates({
+  mode: "poll",
+  pollIntervalMs: 60000,
   requestAccessOnLoad: true,
 });
 ```
+
+`mode` sätter läget för det här dokumentet. Första anropet vinner, samma regel som för `storagePrefix`.
+
+| `mode` | Effekt |
+| --- | --- |
+| utelämnad | Reglagens senaste val ligger kvar. |
+| `"manual"` eller `"oneshot"` | Pollning och hämtning vid sidladdning är av. |
+| `"poll"` | Löpande läsning med sparad upplösning. |
+| `"load"` | En ny träff vid varje sidladdning. |
+
+Ett angivet läge ersätter det som reglagen sparade förra gången. `"poll"` och `"load"` är ett läge var: det andra slås av. `pollIntervalMs` snappar till närmaste tillåtna upplösning. Utelämnad ligger den sparade kvar.
+
+Läsningen startar när tillståndet redan är givet, eller när webbläsaren kan fråga utan ett tryck. Safari och webbläsare på iPhone och iPad sparar läget men väntar med GPS tills ett reglage trycks, om frågan inte är avgjord. Ett nekat tillstånd sparas som fel och läget slås av.
 
 CSS-filen behövs bara om någon sida ritar panelen eller avläsningen. Importen av JavaScript är ofarlig under SSR. Anropa `startCoordinates` i webbläsaren. Anropas den ändå utan `window` gör den ingenting och rör inte `localStorage`.
 
@@ -33,7 +48,7 @@ CSS-filen behövs bara om någon sida ritar panelen eller avläsningen. Importen
 | Frågan är inte avgjord, Safari eller någon webbläsare på iPhone eller iPad | Ingenting. De visar platsfrågan bara i samma tryck som ett klick. Reglagen är vägen dit. |
 | Pollning eller en hämtning pågår redan | Den lämnas ifred. |
 
-Optionen är av som standard. POC:n slår på den om `<html>` har `data-request-access="true"`, eller om adressen har `?request-access`.
+Optionen är av som standard. POC:n slår på den om `<html>` har `data-request-access="true"`, eller om adressen har `?request-access`. Adressen `?mode=poll` eller `?mode=load` startar demon i det läget. `?interval=60000` sätter upplösningen i millisekunder. Reglaget **Hämta vid sidladdning** är ett annat val: det läser en ny träff vid varje sidladdning även när en redan finns.
 
 En väntande fråga ställs igen vid nästa sidladdning, tills webbläsaren har ett ja eller nej. Det är meningen när optionen är på på varje sida.
 
@@ -47,7 +62,7 @@ import { mountCoordinatesPanel } from "./coordinates/index.js";
 const unmount = mountCoordinatesPanel(document.querySelector("#position"));
 ```
 
-Panelen ritar status, senaste träff, knappen **Hämta position**, reglaget **Polla position** och bekräftelsedialogen. Elementet måste finnas i dokumentet. Dialogen måste nå `getCurrentPosition` i samma tur som klicket, annars visar Safari ingen fråga. Panelen gör det redan.
+Panelen ritar status, senaste träff, knappen **Hämta position**, reglagen **Polla position** och **Hämta vid sidladdning**, listan **Upplösning** och bekräftelsedialogen. Elementet måste finnas i dokumentet. Dialogen måste nå `getCurrentPosition` i samma tur som klicket, annars visar Safari ingen fråga. Panelen gör det redan. Upplösningen behöver ingen dialog: den sparas direkt och gäller nästa läsning.
 
 Vue:
 
@@ -98,16 +113,23 @@ import { getCoordinates } from "./coordinates/index.js";
 const coordinates = getCoordinates();
 const stop = coordinates.subscribe((state) => {
   // state.longitude, state.latitude, state.updatedAt
-  // state.polling, state.acquiring, state.error
+  // state.polling, state.readOnLoad, state.acquiring, state.error
 });
 
 coordinates.request("oneshot");
 coordinates.request("poll");
+coordinates.request("load");
 coordinates.refreshNow();
 coordinates.stopPolling();
+coordinates.stopReadOnLoad();
+coordinates.setPollInterval(15000);
 ```
 
-`getCoordinates()` kräver att layouten redan har kallat `startCoordinates()`. `request` och `refreshNow` måste anropas synkront i klickhanteraren. En `await` före anropet gör att Safari inte visar platsfrågan.
+`getCoordinates()` kräver att layouten redan har kallat `startCoordinates()`. `request` och `refreshNow` måste anropas synkront i klickhanteraren. En `await` före anropet gör att Safari inte visar platsfrågan. `setPollInterval` frågar inte om tillstånd och får anropas när som helst.
+
+`state.readOnLoad` hämtar en ny position varje gång ett dokument anropar `startCoordinates()`, alltså vid en vanlig sidladdning. En vyväxling i samma dokument gör det inte. Läget sparas och gäller på nästa sida. Safari läser där utan ett nytt tryck när bekräftelsen redan gett tillstånd.
+
+`state.pollIntervalMs` är millisekunder. Tillåtna värden är 1000, 5000, 15000, 30000, 60000, 300000, 900000 och 3600000. Andra tal snappar till närmaste. Saknas värdet är det 15 sekunder. 1000 följer enhetens egen takt. Övriga är minsta tid mellan läsningar.
 
 `state.error` är `denied`, `blocked`, `unavailable`, `timeout`, `unsupported`, `insecure`, `policy` eller `null`.
 
@@ -118,6 +140,8 @@ coordinates.stopPolling();
 | `ok.longitude`, `ok.latitude` | Senaste godkända koordinater |
 | `ok.updatedAt` | Tidsstämpel från GPS-träffen, i millisekunder |
 | `ok.polling` | Om löpande läsning är på |
+| `ok.pollIntervalMs` | Upplösning i millisekunder. Standard 15000 |
+| `ok.readOnLoad` | Om en ny position hämtas vid varje sidladdning |
 | `ok.acquiring` | Om en hämtning pågår |
 | `ok.acquiringSince` | När den pågående hämtningen började |
 | `ok.acquireMode` | `oneshot`, `poll` eller `null` |
@@ -132,7 +156,7 @@ startCoordinates({
 });
 ```
 
-Flera flikar delar `localStorage`, men bara en anropar GPS. Den synliga sidan tar ett exklusivt Web Lock, `offline-koordinater-geo`. Låset släpps när sidan döljs, navigerar bort eller stänger av pollningen. Webbläsaren släpper det också om dokumentet försvinner. Nästa synliga sida läser `polling` och `acquireMode` och fortsätter. Saknas Web Locks läser sidan ändå, utan flik-lås.
+Flera flikar delar `localStorage`, men bara en anropar GPS. Den synliga sidan tar ett exklusivt Web Lock, `offline-koordinater-geo`. Låset släpps när sidan döljs, navigerar bort eller stänger av pollningen. Webbläsaren släpper det också om dokumentet försvinner. Nästa synliga sida läser `polling`, `readOnLoad` och `acquireMode` och fortsätter. Saknas Web Locks läser sidan ändå, utan flik-lås.
 
 `storagePrefix` och `lockName` kan bara sättas av det första anropet i dokumentet. Ett senare anrop med `requestAccessOnLoad: true` frågar ändå, en gång, om det första inte gjorde det.
 
@@ -191,6 +215,8 @@ const FIELDS = [
   "latitude",
   "updatedAt",
   "polling",
+  "pollIntervalMs",
+  "readOnLoad",
   "acquiring",
   "acquiringSince",
   "acquireMode",
@@ -206,6 +232,8 @@ export function registerCoordinatesStore(Alpine) {
     latitude: Alpine.$persist(null).as(`${prefix}.latitude`),
     updatedAt: Alpine.$persist(null).as(`${prefix}.updatedAt`),
     polling: Alpine.$persist(false).as(`${prefix}.polling`),
+    pollIntervalMs: Alpine.$persist(15000).as(`${prefix}.pollIntervalMs`),
+    readOnLoad: Alpine.$persist(false).as(`${prefix}.readOnLoad`),
     acquiring: Alpine.$persist(false).as(`${prefix}.acquiring`),
     acquiringSince: Alpine.$persist(null).as(`${prefix}.acquiringSince`),
     acquireMode: Alpine.$persist(null).as(`${prefix}.acquireMode`),
@@ -219,6 +247,12 @@ export function registerCoordinatesStore(Alpine) {
     },
     stopPolling() {
       coordinates.stopPolling();
+    },
+    stopReadOnLoad() {
+      coordinates.stopReadOnLoad();
+    },
+    setPollInterval(ms) {
+      coordinates.setPollInterval(ms);
     },
   });
 
@@ -272,18 +306,17 @@ coordinates.longitude;
 Texterna kommer från `describeCoordinates` i `js/coordinates/status.js`.
 
 ```js
-import { describeCoordinates } from "./coordinates/status.js";
+import { describeCoordinates, pollIntervalCadence } from "./coordinates/status.js";
 
-const DIALOG_TEXT = {
-  oneshot:
-    "Får enheten hämta position en gång? Träffen sparas i webbläsaren. Du kan byta sida medan hämtningen pågår.",
-  poll: "Får enheten hämta position löpande? Reglaget stänger av pollningen, även om du har bytt sida.",
-};
+const ONESHOT_DIALOG =
+  "Får enheten hämta position en gång? Träffen sparas i webbläsaren. Du kan byta sida medan hämtningen pågår.";
 
 export function registerCoordinatesData(Alpine) {
   Alpine.data("coordinatesReadout", coordinatesReadout);
   Alpine.data("fetchPosition", fetchPosition);
   Alpine.data("pollSwitch", pollSwitch);
+  Alpine.data("loadSwitch", loadSwitch);
+  Alpine.data("pollInterval", pollInterval);
   Alpine.data("confirmDialog", confirmDialog);
 }
 
@@ -333,6 +366,40 @@ function pollSwitch() {
   };
 }
 
+function loadSwitch() {
+  return {
+    init() {
+      this.$refs.input.checked = Boolean(this.$store.coordinates.readOnLoad);
+      this.$watch("$store.coordinates.readOnLoad", (value) => {
+        this.$refs.input.checked = Boolean(value);
+      });
+    },
+    onChange(event) {
+      if (event.target.checked) {
+        event.target.checked = false;
+        this.$store.ui.open("load");
+        return;
+      }
+      this.$store.coordinates.stopReadOnLoad();
+    },
+  };
+}
+
+function pollInterval() {
+  return {
+    init() {
+      const sync = (value) => {
+        this.$refs.input.value = String(value);
+      };
+      sync(this.$store.coordinates.pollIntervalMs);
+      this.$watch("$store.coordinates.pollIntervalMs", sync);
+    },
+    onChange(event) {
+      this.$store.coordinates.setPollInterval(Number(event.target.value));
+    },
+  };
+}
+
 function confirmDialog() {
   return {
     init() {
@@ -346,12 +413,21 @@ function confirmDialog() {
       });
     },
     get text() {
-      return DIALOG_TEXT[this.$store.ui.mode] ?? "";
+      const mode = this.$store.ui.mode;
+      if (mode === "oneshot") return ONESHOT_DIALOG;
+      if (mode === "poll") {
+        const cadence = pollIntervalCadence(this.$store.coordinates.pollIntervalMs);
+        return `Får enheten hämta position ${cadence}? Reglaget stänger av pollningen, även om du har bytt sida.`;
+      }
+      if (mode === "load") {
+        return "Får enheten hämta position varje gång en sida öppnas? Reglaget stänger av det, även om du har bytt sida.";
+      }
+      return "";
     },
     allow() {
       const mode = this.$store.ui.mode;
       // Reach getCurrentPosition in this turn, before the dialog closes.
-      if (mode === "poll" || mode === "oneshot") this.$store.coordinates.request(mode);
+      if (mode === "poll" || mode === "oneshot" || mode === "load") this.$store.coordinates.request(mode);
       this.$store.ui.close();
     },
     cancel() {
@@ -393,6 +469,26 @@ function confirmDialog() {
         <span>Polla position</span>
       </label>
     </div>
+    <div x-data="loadSwitch">
+      <label class="coordinates-switch">
+        <input class="coordinates-switch-input" type="checkbox" role="switch" x-ref="input" x-on:change="onChange($event)">
+        <span class="coordinates-track" aria-hidden="true"><span class="coordinates-thumb"></span></span>
+        <span>Hämta vid sidladdning</span>
+      </label>
+    </div>
+    <label class="coordinates-interval" x-data="pollInterval">
+      <span>Upplösning</span>
+      <select class="coordinates-interval-input" x-ref="input" x-on:change="onChange($event)">
+        <option value="1000">1 sekund (enhetens takt)</option>
+        <option value="5000">5 sekunder</option>
+        <option value="15000">15 sekunder</option>
+        <option value="30000">30 sekunder</option>
+        <option value="60000">1 minut</option>
+        <option value="300000">5 minuter</option>
+        <option value="900000">15 minuter</option>
+        <option value="3600000">1 timme</option>
+      </select>
+    </label>
   </div>
 </section>
 
@@ -406,7 +502,7 @@ function confirmDialog() {
 </dialog>
 ```
 
-Låt poll-reglaget vara en egen checkbox. `polling` sätts i `request("poll")` först när dialogen fått ett ja. `x-model` på `polling` skulle spara flaggan innan dess. Avläsning utan reglage är `coordinatesReadout` ensam. `error` är samma koder som i avsnittet Eget gränssnitt.
+Låt poll-reglaget och sidladdnings-reglaget vara egna checkboxar. `polling` sätts i `request("poll")` och `readOnLoad` i `request("load")`, först när dialogen fått ett ja. `x-model` på flaggan skulle spara den innan dess. Upplösningen är en vanlig lista: `setPollInterval` snappar värdet och sparar det utan dialog. Etiketter för valen finns i `pollIntervalOptionLabel` i `status.js`. Avläsning utan reglage är `coordinatesReadout` ensam. `error` är samma koder som i avsnittet Eget gränssnitt.
 
 ## Köra POC:n
 
@@ -444,7 +540,8 @@ Positionen väntar inte på workern och inte på att värden svarar. Modulen lä
 3. Med wifi eller VPN uppe men värden oåtkomlig: länken är fortfarande uppe, cachen är aktiv, sidan och senaste position finns kvar. Sidan gör ingen värdprob.
 4. På Min sida: **Hämta position**, bekräfta, och vänta in GPS. Kommer ingen platsfråga, och inget läge, säger panelen att Platstjänster eller webbläsarens tillstånd saknas.
 5. Öppna **Annan sida** med en vanlig sidladdning. Senaste position ligger kvar. Där finns inga reglage.
-6. Reglaget **Polla position** på Min sida läser positionen löpande. Byt till Annan sida eller en annan flik: den synliga sidan tar över läsningen. Av, på Min sida, stänger av pollningen.
+6. Reglaget **Polla position** på Min sida läser positionen med vald **Upplösning**. Standard är 15 sekunder. 1 sekund följer enhetens egen takt, ofta ungefär en gång i sekunden. Byt till Annan sida eller en annan flik: den synliga sidan tar över läsningen. Av, på Min sida, stänger av pollningen.
+7. Reglaget **Hämta vid sidladdning** läser en ny position varje gång en sida öppnas, även Annan sida, även när en träff redan finns. Av lämnar den sparade träffen kvar till nästa manuella hämtning.
 
 ## Hur läsningen går till
 
@@ -460,7 +557,13 @@ I samma tur, utan att vänta, kollar modulen:
 
 Permissions API frågas parallellt och får högst 2,5 sekunder på sig. Hänger det, eller kastar det, stoppar det inte läsningen. Säger det `denied` visas det direkt. Stannar läget på `prompt` eller uteblir svaret, och ingen träff kommer inom 10 sekunder, sparas `blocked`. Texten säger att man ska svara om en fråga faktiskt visas, och annars slå på Platstjänster och tillåt webbläsaren. Anropet lämnas igång, så ett sent svar fortfarande kan räknas.
 
-`watchPosition` startar inte i samma tryck. Det väntar tills engångsanropet fått svar, så ett tidigt fel från klockan inte kan avbryta frågan. En sida som tar över en redan igång pollning börjar bevaka direkt. Nekad, blockerad, saknad policy, osäker eller otillgänglig position är ett synligt fel. Ett fel från själva GPS-anropet som är nekat, blockerat, policy, osäkert eller en enhet utan API slår också av pollning.
+`watchPosition` startar inte i samma tryck. Det väntar tills engångsanropet fått svar, så ett tidigt fel från klockan inte kan avbryta frågan. En sida som tar över en redan igång pollning på 1 sekund börjar bevaka direkt. Nekad, blockerad, saknad policy, osäker eller otillgänglig position är ett synligt fel. Ett fel från själva GPS-anropet som är nekat, blockerat, policy, osäkert eller en enhet utan API slår också av pollning.
+
+Geolocation API har inget intervall. Upplösningen 1 sekund är därför enhetens egen takt: `watchPosition` med hög noggrannhet, som ofta levererar en träff ungefär en gång i sekunden. `maximumAge` på 5 sekunder tillåter en cachad träff och sätter inte takten.
+
+Grövre upplösning anropar `getCurrentPosition` en gång per intervall. Nästa läsning tidigast när intervallet har gått sedan den förra började. Tar själva läsningen längre tid börjar nästa när den pågående är klar. Ett fel som inte stänger av pollningen väntar ett helt intervall innan nästa försök. Listan kan ändras medan pollning är på. Valet ligger i `ok.pollIntervalMs` och följer med till nästa sida. Standard är 15 sekunder. Tillåtna värden är 1 sekund, 5 sekunder, 15 sekunder, 30 sekunder, 1 minut, 5 minuter, 15 minuter och 1 timme.
+
+`readOnLoad` läser en gång per dokument, även när en träff redan ligger sparad. Det startar i `startCoordinates()`, så det är en sidladdning och inte ett routbyte i samma dokument. Bekräftelsen på reglaget är trycket som får visa platsfrågan. Senare sidor läser utan nytt tryck när tillståndet redan är givet. Nekad, blockerad, osäker sida, saknad policy eller en enhet utan API stänger av läget. Timeout och en tillfälligt oläsbar position lämnar det på, så nästa sidladdning försöker igen. Pollning och sidladdning kan vara på samtidigt: sidan läser direkt och fortsätter sedan med upplösningen.
 
 Träffen normaliseras (ändliga tal, lat inom ±90, long inom ±180) och skrivs till `localStorage` som JSON.
 
@@ -482,6 +585,7 @@ Andra worker-förmågor hjälper inte positionen. Background Sync kan inte läsa
 | --- | --- |
 | `js/coordinates/index.js` | Det en Vite-app importerar |
 | `js/coordinates/engine.js` | Bakgrundsmotor: GPS, tillstånd, `localStorage`, Web Lock |
+| `js/coordinates/interval.js` | Tillåtna upplösningar |
 | `js/coordinates/panel.js` | Panel och avläsning |
 | `js/coordinates/status.js` | Texterna i panelen |
 | `js/coordinates/panel.css` | Utseende för panelen. Variabler faller tillbaka om värden inte sätter `--ink`, `--sheet` och de andra |

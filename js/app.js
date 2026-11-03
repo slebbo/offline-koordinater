@@ -10,11 +10,19 @@ import {
 } from "./coordinates/index.js";
 import { startOfflineStatus } from "./offline-status.js";
 
+const params = new URLSearchParams(window.location.search);
+const mode = params.get("mode");
+const interval = params.get("interval");
+
 startCoordinates({
   // Ask on load when the context allows it. Left off unless the page opts
   // in, so the confirm dialog stays the demo's only prompt.
   requestAccessOnLoad: document.documentElement.dataset.requestAccess === "true"
-    || new URLSearchParams(window.location.search).has("request-access"),
+    || params.has("request-access"),
+  // `?mode=poll` or `?mode=load` lets the demo start in that mode.
+  // `?interval=60000` sets the sample interval in milliseconds.
+  ...(mode ? { mode } : {}),
+  ...(interval ? { pollIntervalMs: Number(interval) } : {}),
 });
 
 startOfflineStatus(document.querySelector("[data-offline-status]"));

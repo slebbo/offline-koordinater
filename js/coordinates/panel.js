@@ -3,13 +3,17 @@
 // position should be visible. Both subscribe; neither starts a second tracker.
 
 import { startCoordinates } from "./engine.js";
-import { describeCoordinates } from "./status.js";
+import { canonicalPollInterval, POLL_INTERVALS_MS } from "./interval.js";
+import { describeCoordinates, pollIntervalCadence, pollIntervalOptionLabel } from "./status.js";
 
-const DIALOG_TEXT = {
-  oneshot:
-    "Får enheten hämta position en gång? Träffen sparas i webbläsaren. Du kan byta sida medan hämtningen pågår.",
-  poll: "Får enheten hämta position löpande? Reglaget stänger av pollningen, även om du har bytt sida.",
-};
+const ONESHOT_DIALOG =
+  "Får enheten hämta position en gång? Träffen sparas i webbläsaren. Du kan byta sida medan hämtningen pågår.";
+const LOAD_DIALOG =
+  "Får enheten hämta position varje gång en sida öppnas? Reglaget stänger av det, även om du har bytt sida.";
+
+function pollDialogText(ms) {
+  return `Får enheten hämta position ${pollIntervalCadence(ms)}? Reglaget stänger av pollningen, även om du har bytt sida.`;
+}
 
 const mounts = new WeakMap();
 let mountSequence = 0;
@@ -50,14 +54,18 @@ function mount(element, { controls }) {
   element.classList.add("coordinates");
   if (addedRole) element.setAttribute("role", "region");
   if (addedLabel) element.setAttribute("aria-label", "Enhetens position");
-  element.innerHTML = controls ? panelMarkup(id) : readoutMarkup();
+  element.innerHTML = controls
+    ? panelMarkup(id, coordinates.getState().pollIntervalMs)
+    : readoutMarkup();
 
   const status = element.querySelector(".coordinates-status");
   const spinner = element.querySelector(".coordinates-spinner");
   const statusText = element.querySelector(".coordinates-status-text");
   const position = element.querySelector(".coordinates-position");
   const updated = element.querySelector(".coordinates-updated");
-  const input = element.querySelector(".coordinates-switch-input");
+  const input = element.querySelector(".coordinates-poll-input");
+  const loadInput = element.querySelector(".coordinates-load-input");
+  const intervalInput = element.querySelector(".coordinates-interval-input");
   const dialog = element.querySelector(".coordinates-dialog");
   const dialogText = element.querySelector(".coordinates-dialog-text");
   let pendingMode = null;
@@ -73,11 +81,16 @@ function mount(element, { controls }) {
     updated.textContent = view.updatedText;
     updated.dataset.empty = view.updatedEmpty;
     if (input) input.checked = Boolean(state.polling);
+    if (loadInput) loadInput.checked = Boolean(state.readOnLoad);
+    if (intervalInput && document.activeElement !== intervalInput) {
+      const next = String(canonicalPollInterval(state.pollIntervalMs));
+      if (intervalInput.value !== next) intervalInput.value = next;
+    }
   }
 
   function openDialog(mode) {
     pendingMode = mode;
-    if (dialogText) dialogText.textContent = DIALOG_TEXT[mode] ?? "";
+    if (dialogText) dialogText.textContent = dialogCopy(mode, coordinates.getState());
     if (dialog && !dialog.open) dialog.showModal();
   }
 
@@ -100,11 +113,24 @@ function mount(element, { controls }) {
     coordinates.stopPolling();
   });
 
+  loadInput?.addEventListener("change", () => {
+    if (loadInput.checked) {
+      loadInput.checked = false;
+      openDialog("load");
+      return;
+    }
+    coordinates.stopReadOnLoad();
+  });
+
+  intervalInput?.addEventListener("change", () => {
+    coordinates.setPollInterval(Number(intervalInput.value));
+  });
+
   element.querySelector(".coordinates-dialog-allow")?.addEventListener("click", () => {
     const mode = pendingMode;
     // Read position before closing. The tap has to reach getCurrentPosition
     // in this same turn, or mobile Safari never shows its prompt.
-    if (mode === "poll" || mode === "oneshot") coordinates.request(mode);
+    if (mode === "poll" || mode === "oneshot" || mode === "load") coordinates.request(mode);
     pendingMode = null;
     if (dialog?.open) dialog.close();
   });
@@ -115,6 +141,10 @@ function mount(element, { controls }) {
   });
 
   dialog?.addEventListener("close", () => {
+    // A close from the previous prompt can be delivered after the next one
+    // has already opened. Leaving that prompt's mode in place keeps Tillåt
+    // attached to the question on screen.
+    if (dialog.open) return;
     pendingMode = null;
   });
 
@@ -155,19 +185,43 @@ function readoutMarkup() {
   `;
 }
 
-function panelMarkup(id) {
+function dialogCopy(mode, state) {
+  if (mode === "poll") return pollDialogText(state.pollIntervalMs);
+  if (mode === "load") return LOAD_DIALOG;
+  return ONESHOT_DIALOG;
+}
+
+function panelMarkup(id, intervalMs) {
   const hintId = `coordinates-hint-${id}`;
+  const loadHintId = `coordinates-load-hint-${id}`;
   const titleId = `coordinates-title-${id}`;
+  const selected = canonicalPollInterval(intervalMs);
+  const options = POLL_INTERVALS_MS.map((ms) => {
+    const selectedAttr = ms === selected ? " selected" : "";
+    return `<option value="${ms}"${selectedAttr}>${pollIntervalOptionLabel(ms)}</option>`;
+  }).join("");
   return `
     ${readoutMarkup()}
     <div class="coordinates-controls">
       <button class="coordinates-action coordinates-action-fetch" type="button">Hämta position</button>
       <label class="coordinates-switch">
-        <input class="coordinates-switch-input" type="checkbox" role="switch" aria-describedby="${hintId}">
+        <input class="coordinates-switch-input coordinates-poll-input" type="checkbox" role="switch" aria-describedby="${hintId}">
         <span class="coordinates-track" aria-hidden="true"><span class="coordinates-thumb"></span></span>
         <span>Polla position</span>
       </label>
-      <p class="coordinates-hint" id="${hintId}">På läser positionen löpande. Av stoppar pollningen.</p>
+      <label class="coordinates-switch">
+        <input class="coordinates-switch-input coordinates-load-input" type="checkbox" role="switch" aria-describedby="${loadHintId}">
+        <span class="coordinates-track" aria-hidden="true"><span class="coordinates-thumb"></span></span>
+        <span>Hämta vid sidladdning</span>
+      </label>
+      <label class="coordinates-interval">
+        <span>Upplösning</span>
+        <select class="coordinates-interval-input" aria-describedby="${hintId}">
+          ${options}
+        </select>
+      </label>
+      <p class="coordinates-hint" id="${hintId}">På läser positionen med vald upplösning. 1 sekund följer enhetens egen takt. Grövre val läser en ny träff med det intervallet. Av stoppar pollningen.</p>
+      <p class="coordinates-hint" id="${loadHintId}">På hämtar en ny position varje gång en sida öppnas. Av lämnar den senast sparade träffen.</p>
     </div>
     <dialog class="coordinates-dialog" aria-labelledby="${titleId}">
       <h2 class="coordinates-dialog-title" id="${titleId}">Bekräfta position</h2>
